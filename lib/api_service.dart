@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -61,6 +62,12 @@ class ApiService {
 
   // ── RESPONDER AUTH ────────────────────────────────────────────────
 
+  /// Multipart — the backend requires a valid_id photo (see
+  /// ResponderAuthController::register), which a plain JSON POST can
+  /// never carry. `unit_station` was removed from the form entirely (see
+  /// responder_register.dart) in favor of this required ID upload, so it
+  /// isn't sent here — the backend column is nullable, so simply not
+  /// sending it is fine.
   static Future<ApiResponse> responderRegister({
     required String firstName,
     String? middleName,
@@ -68,32 +75,38 @@ class ApiService {
     String? suffix,
     required String badgeNumber,
     required String agency,
-    required String unitStation,
     required String mobile,
     required String email,
     required String password,
+    required File validId,
   }) async {
     try {
-      final response = await http
-          .post(
-            Uri.parse('$baseUrl/responder/register'),
-            headers: _baseHeaders,
-            body: jsonEncode({
-              'first_name': firstName,
-              if (middleName != null && middleName.isNotEmpty)
-                'middle_name': middleName,
-              'last_name': lastName,
-              if (suffix != null && suffix.isNotEmpty) 'suffix': suffix,
-              'badge_number': badgeNumber,
-              'agency': agency,
-              'unit_station': unitStation,
-              'mobile': mobile,
-              'email': email,
-              'password': password,
-            }),
-          )
-          .timeout(const Duration(seconds: 15));
+      final uri = Uri.parse('$baseUrl/responder/register');
+      final request = http.MultipartRequest('POST', uri);
 
+      request.headers['Accept'] = 'application/json';
+      request.fields['first_name'] = firstName;
+      if (middleName != null && middleName.isNotEmpty) {
+        request.fields['middle_name'] = middleName;
+      }
+      request.fields['last_name'] = lastName;
+      if (suffix != null && suffix.isNotEmpty) {
+        request.fields['suffix'] = suffix;
+      }
+      request.fields['badge_number'] = badgeNumber;
+      request.fields['agency'] = agency;
+      request.fields['mobile'] = mobile;
+      request.fields['email'] = email;
+      request.fields['password'] = password;
+
+      request.files.add(
+        await http.MultipartFile.fromPath('valid_id', validId.path),
+      );
+
+      final streamedResponse = await request.send().timeout(
+        const Duration(seconds: 20),
+      );
+      final response = await http.Response.fromStream(streamedResponse);
       final data = jsonDecode(response.body);
 
       if (response.statusCode == 200) {
@@ -354,6 +367,73 @@ class ApiService {
         return ApiResponse.success(jsonDecode(response.body));
       }
       return ApiResponse.error('Could not load alerts.');
+    } catch (e) {
+      return ApiResponse.error(_handleError(e));
+    }
+  }
+
+  // ── EVACUATION CENTERS ───────────────────────────────────────────
+  // GET is the same public /api/evacuation-centers endpoint the citizen
+  // app hits (see Api\EvacuationCenterController::index) — not guard
+  // specific, works fine with a responder token or none at all.
+  //
+  // POST is new: only MSWD responders are allowed to add a center. The
+  // backend re-checks this (403 for anyone else), this is just so the
+  // UI can show a clean error instead of a raw 403 body.
+  static Future<ApiResponse> getEvacuationCenters() async {
+    try {
+      final response = await http
+          .get(Uri.parse('$baseUrl/evacuation-centers'), headers: _baseHeaders)
+          .timeout(const Duration(seconds: 15));
+
+      if (response.statusCode == 200) {
+        return ApiResponse.success(jsonDecode(response.body));
+      }
+      return ApiResponse.error('Could not load evacuation centers.');
+    } catch (e) {
+      return ApiResponse.error(_handleError(e));
+    }
+  }
+
+  static Future<ApiResponse> createEvacuationCenter({
+    required String name,
+    required String barangay,
+    required double latitude,
+    required double longitude,
+    required int capacity,
+    required String status,
+  }) async {
+    try {
+      final headers = await _responderAuthHeaders();
+      final response = await http
+          .post(
+            Uri.parse('$baseUrl/evacuation-centers'),
+            headers: headers,
+            body: jsonEncode({
+              'name': name,
+              'barangay': barangay,
+              'latitude': latitude,
+              'longitude': longitude,
+              'capacity': capacity,
+              'status': status,
+            }),
+          )
+          .timeout(const Duration(seconds: 15));
+
+      final data = jsonDecode(response.body);
+
+      if (response.statusCode == 201) {
+        return ApiResponse.success(data);
+      }
+      if (data['errors'] != null) {
+        final errors = data['errors'] as Map<String, dynamic>;
+        final firstError = errors.values.first;
+        final msg = firstError is List ? firstError.first : firstError;
+        return ApiResponse.error(msg.toString());
+      }
+      return ApiResponse.error(
+        data['message'] ?? 'Failed to add evacuation center.',
+      );
     } catch (e) {
       return ApiResponse.error(_handleError(e));
     }

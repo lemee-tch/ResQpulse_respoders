@@ -8,6 +8,8 @@ import 'incident_locations.dart';
 import 'safety_tips.dart';
 import 'route_map.dart';
 import 'navigation_screen.dart';
+import 'add_evacuation.dart';
+import 'evacuation_centers.dart';
 
 // Same gradient as the citizen app's home header — kept identical so both
 // apps in the ResQPulse family read as one product.
@@ -101,13 +103,10 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
   // ── Derived lists ────────────────────────────────────────────────
 
   /// Everything currently assigned to this responder's agency that
-  /// hasn't been resolved yet — the backend (assignedToResponder) already
-  /// excludes resolved incidents, but this stays as an explicit local
-  /// filter as a safety net and for reuse across tiles/screens.
-  ///
-  /// This now also powers "Incident Locations" — SOS Emergency reports
-  /// are included here (they weren't before), so the map shows every
-  /// unresolved incident, not just non-SOS ones.
+  /// hasn't been resolved yet. This now powers BOTH "Active Incidents"
+  /// AND "Incident Locations" — SOS Emergency reports are included here,
+  /// so the map/list shows every unresolved incident, not just non-SOS
+  /// ones.
   List<dynamic> get _activeIncidents =>
       _incidents.where((i) => i['status'] != 'resolved').toList();
 
@@ -123,6 +122,12 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
     final String agency = _responder?['agency'] ?? '';
     final String unit = _responder?['unit_station'] ?? '';
     final String badge = _responder?['badge_number'] ?? '';
+
+    // MSWD doesn't respond to incidents — their home screen skips every
+    // response-workflow tile (Active Incidents, Report History, Refresh
+    // Feed, Critical Alerts) and instead surfaces evacuation-center
+    // management alongside the informational tiles everyone gets.
+    final bool isMswd = agency == 'MSWD';
 
     if (_isLoading && _responder == null) {
       return const Scaffold(
@@ -155,202 +160,299 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
                       crossAxisSpacing: 12,
                       mainAxisSpacing: 12,
                       childAspectRatio: 0.92,
-                      children: [
-                        _QuickTile(
-                          label: 'Safety\nTips',
-                          icon: Icons.lightbulb_outline,
-                          iconColor: const Color(0xFFF9A825),
-                          bgColor: const Color(0xFFFFFDE7),
-                          onTap: () => Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => const SafetyTipsScreen(),
-                            ),
-                          ),
-                        ),
-                        _QuickTile(
-                          label: 'Active\nIncidents',
-                          icon: Icons.assignment_late_outlined,
-                          iconColor: const Color(0xFFD32F2F),
-                          bgColor: const Color(0xFFFFEBEE),
-                          badgeCount: _activeIncidents.length,
-                          onTap: () => Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => _IncidentListScreen(
-                                title: 'Active Incidents',
-                                subtitle:
-                                    'Everything currently assigned to your agency.',
-                                incidents: _activeIncidents,
-                                isLoading: _incidentsLoading,
-                                errorMessage: _incidentsError,
-                                onRetry: _loadIncidents,
-                                emptyIcon: Icons.task_alt,
-                                emptyMessage: 'No active incidents right now.',
-                              ),
-                            ),
-                          ),
-                        ),
-                        _QuickTile(
-                          label: 'Report\nHistory',
-                          icon: Icons.fact_check_outlined,
-                          iconColor: const Color(0xFF2E7D32),
-                          bgColor: const Color(0xFFE8F5E9),
-                          onTap: () => Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => const _ReportHistoryScreen(),
-                            ),
-                          ),
-                        ),
-                        _QuickTile(
-                          label: 'Incident\nLocations',
-                          icon: Icons.location_on_outlined,
-                          iconColor: const Color(0xFF1565C0),
-                          bgColor: const Color(0xFFE3F2FD),
-                          onTap: () => Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => IncidentLocationsScreen(
-                                // All non-resolved incidents assigned to
-                                // this responder's agency — including SOS
-                                // Emergency, which used to be filtered out.
-                                incidents: _activeIncidents,
-                                isLoading: _incidentsLoading,
-                                errorMessage: _incidentsError,
-                                onRetry: _loadIncidents,
-                                onOpenDetail: (incident) => Navigator.push(
+                      children: isMswd
+                          ? [
+                              _QuickTile(
+                                label: 'Safety\nTips',
+                                icon: Icons.lightbulb_outline,
+                                iconColor: const Color(0xFFF9A825),
+                                bgColor: const Color(0xFFFFFDE7),
+                                onTap: () => Navigator.push(
                                   context,
                                   MaterialPageRoute(
-                                    builder: (_) => _IncidentDetailScreen(
-                                      incident: incident,
+                                    builder: (_) => const SafetyTipsScreen(),
+                                  ),
+                                ),
+                              ),
+                              _QuickTile(
+                                label: 'Incident\nLocations',
+                                icon: Icons.location_on_outlined,
+                                iconColor: const Color(0xFF1565C0),
+                                bgColor: const Color(0xFFE3F2FD),
+                                onTap: () => Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => IncidentLocationsScreen(
+                                      // All non-resolved incidents,
+                                      // including SOS.
+                                      incidents: _activeIncidents,
+                                      isLoading: _incidentsLoading,
+                                      errorMessage: _incidentsError,
+                                      onRetry: _loadIncidents,
+                                      onOpenDetail: (incident) =>
+                                          Navigator.push(
+                                            context,
+                                            MaterialPageRoute(
+                                              builder: (_) =>
+                                                  _IncidentDetailScreen(
+                                                    incident: incident,
+                                                  ),
+                                            ),
+                                          ),
                                     ),
                                   ),
                                 ),
                               ),
-                            ),
-                          ),
-                        ),
-                        _QuickTile(
-                          label: 'Disaster\nAlerts',
-                          icon: Icons.campaign_outlined,
-                          iconColor: const Color(0xFF6A1B9A),
-                          bgColor: const Color(0xFFF3E5F5),
-                          onTap: () => Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => const _DisasterAlertsScreen(),
-                            ),
-                          ),
-                        ),
-                        _QuickTile(
-                          label: 'Refresh\nFeed',
-                          icon: Icons.refresh_rounded,
-                          iconColor: const Color(0xFF00897B),
-                          bgColor: const Color(0xFFE0F2F1),
-                          onTap: _refreshAll,
-                        ),
-                      ],
+                              _QuickTile(
+                                label: 'Disaster\nAlerts',
+                                icon: Icons.campaign_outlined,
+                                iconColor: const Color(0xFF6A1B9A),
+                                bgColor: const Color(0xFFF3E5F5),
+                                onTap: () => Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) =>
+                                        const _DisasterAlertsScreen(),
+                                  ),
+                                ),
+                              ),
+                              _QuickTile(
+                                label: 'Evacuation\nCenters',
+                                icon: Icons.home_work_outlined,
+                                iconColor: const Color(0xFF2E7D32),
+                                bgColor: const Color(0xFFE8F5E9),
+                                onTap: () => Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) =>
+                                        const ResponderEvacuationCentersScreen(
+                                          isMswd: true,
+                                        ),
+                                  ),
+                                ),
+                              ),
+                              _QuickTile(
+                                label: 'Add\nEvac. Center',
+                                icon: Icons.add_home_work_outlined,
+                                iconColor: const Color(0xFF00897B),
+                                bgColor: const Color(0xFFE0F2F1),
+                                onTap: () => Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) =>
+                                        const AddEvacuationCenterScreen(),
+                                  ),
+                                ),
+                              ),
+                            ]
+                          : [
+                              _QuickTile(
+                                label: 'Safety\nTips',
+                                icon: Icons.lightbulb_outline,
+                                iconColor: const Color(0xFFF9A825),
+                                bgColor: const Color(0xFFFFFDE7),
+                                onTap: () => Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => const SafetyTipsScreen(),
+                                  ),
+                                ),
+                              ),
+                              _QuickTile(
+                                label: 'Active\nIncidents',
+                                icon: Icons.assignment_late_outlined,
+                                iconColor: const Color(0xFFD32F2F),
+                                bgColor: const Color(0xFFFFEBEE),
+                                badgeCount: _activeIncidents.length,
+                                onTap: () => Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => _IncidentListScreen(
+                                      title: 'Active Incidents',
+                                      subtitle:
+                                          'Everything currently assigned to your agency.',
+                                      incidents: _activeIncidents,
+                                      isLoading: _incidentsLoading,
+                                      errorMessage: _incidentsError,
+                                      onRetry: _loadIncidents,
+                                      emptyIcon: Icons.task_alt,
+                                      emptyMessage:
+                                          'No active incidents right now.',
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              _QuickTile(
+                                label: 'Report\nHistory',
+                                icon: Icons.fact_check_outlined,
+                                iconColor: const Color(0xFF2E7D32),
+                                bgColor: const Color(0xFFE8F5E9),
+                                onTap: () => Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) =>
+                                        const _ReportHistoryScreen(),
+                                  ),
+                                ),
+                              ),
+                              _QuickTile(
+                                label: 'Incident\nLocations',
+                                icon: Icons.location_on_outlined,
+                                iconColor: const Color(0xFF1565C0),
+                                bgColor: const Color(0xFFE3F2FD),
+                                onTap: () => Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => IncidentLocationsScreen(
+                                      // All non-resolved incidents,
+                                      // including SOS.
+                                      incidents: _activeIncidents,
+                                      isLoading: _incidentsLoading,
+                                      errorMessage: _incidentsError,
+                                      onRetry: _loadIncidents,
+                                      onOpenDetail: (incident) =>
+                                          Navigator.push(
+                                            context,
+                                            MaterialPageRoute(
+                                              builder: (_) =>
+                                                  _IncidentDetailScreen(
+                                                    incident: incident,
+                                                  ),
+                                            ),
+                                          ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              _QuickTile(
+                                label: 'Disaster\nAlerts',
+                                icon: Icons.campaign_outlined,
+                                iconColor: const Color(0xFF6A1B9A),
+                                bgColor: const Color(0xFFF3E5F5),
+                                onTap: () => Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) =>
+                                        const _DisasterAlertsScreen(),
+                                  ),
+                                ),
+                              ),
+                              _QuickTile(
+                                label: 'Refresh\nFeed',
+                                icon: Icons.refresh_rounded,
+                                iconColor: const Color(0xFF00897B),
+                                bgColor: const Color(0xFFE0F2F1),
+                                onTap: _refreshAll,
+                              ),
+                            ],
                     ),
-
-                    const SizedBox(height: 28),
 
                     // ── Critical Alerts ─────────────────────────────
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text(
-                          'CRITICAL ALERT',
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.bold,
-                            color: Color(0xFF1A1A2E),
-                            letterSpacing: 0.3,
+                    // MSWD doesn't respond to incidents, so this whole
+                    // section (critical-priority dispatch cards) is
+                    // hidden for that agency — nothing here is
+                    // actionable for them.
+                    if (!isMswd) ...[
+                      const SizedBox(height: 28),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'CRITICAL ALERT',
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF1A1A2E),
+                              letterSpacing: 0.3,
+                            ),
                           ),
-                        ),
-                        GestureDetector(
-                          onTap: () => Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => _IncidentListScreen(
-                                title: 'Critical Alerts',
-                                subtitle:
-                                    'All open incidents flagged critical priority.',
-                                incidents: _criticalIncidents,
-                                isLoading: _incidentsLoading,
-                                errorMessage: _incidentsError,
-                                onRetry: _loadIncidents,
-                                emptyIcon: Icons.shield_outlined,
-                                emptyMessage: 'No critical alerts. All clear.',
+                          GestureDetector(
+                            onTap: () => Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => _IncidentListScreen(
+                                  title: 'Critical Alerts',
+                                  subtitle:
+                                      'All open incidents flagged critical priority.',
+                                  incidents: _criticalIncidents,
+                                  isLoading: _incidentsLoading,
+                                  errorMessage: _incidentsError,
+                                  onRetry: _loadIncidents,
+                                  emptyIcon: Icons.shield_outlined,
+                                  emptyMessage:
+                                      'No critical alerts. All clear.',
+                                ),
                               ),
                             ),
-                          ),
-                          child: const Text(
-                            'View All',
-                            style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                              color: Color(0xFF1565C0),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-
-                    if (_incidentsLoading)
-                      const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 20),
-                        child: Center(
-                          child: CircularProgressIndicator(color: _gradientTop),
-                        ),
-                      )
-                    else if (_criticalIncidents.isEmpty)
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.symmetric(vertical: 26),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFE8F5E9),
-                          borderRadius: BorderRadius.circular(18),
-                        ),
-                        child: Column(
-                          children: [
-                            Icon(
-                              Icons.shield_outlined,
-                              color: Colors.green[400],
-                              size: 30,
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              'No critical alerts. All clear.',
+                            child: const Text(
+                              'View All',
                               style: TextStyle(
                                 fontSize: 13,
-                                color: Colors.green[800],
                                 fontWeight: FontWeight.w600,
+                                color: Color(0xFF1565C0),
                               ),
                             ),
-                          ],
-                        ),
-                      )
-                    else
-                      ..._criticalIncidents
-                          .take(3)
-                          .map(
-                            (incident) => Padding(
-                              padding: const EdgeInsets.only(bottom: 12),
-                              child: _CriticalAlertCard(
-                                incident: incident,
-                                onViewDetails: () => Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => _IncidentDetailScreen(
-                                      incident: incident,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+
+                      if (_incidentsLoading)
+                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 20),
+                          child: Center(
+                            child: CircularProgressIndicator(
+                              color: _gradientTop,
+                            ),
+                          ),
+                        )
+                      else if (_criticalIncidents.isEmpty)
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(vertical: 26),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFE8F5E9),
+                            borderRadius: BorderRadius.circular(18),
+                          ),
+                          child: Column(
+                            children: [
+                              Icon(
+                                Icons.shield_outlined,
+                                color: Colors.green[400],
+                                size: 30,
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                'No critical alerts. All clear.',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: Colors.green[800],
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
+                        )
+                      else
+                        ..._criticalIncidents
+                            .take(3)
+                            .map(
+                              (incident) => Padding(
+                                padding: const EdgeInsets.only(bottom: 12),
+                                child: _CriticalAlertCard(
+                                  incident: incident,
+                                  onViewDetails: () => Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => _IncidentDetailScreen(
+                                        incident: incident,
+                                      ),
                                     ),
                                   ),
                                 ),
                               ),
                             ),
-                          ),
+                    ],
                   ],
                 ),
               ),
@@ -1356,7 +1458,9 @@ class _DisasterAlertsScreenState extends State<_DisasterAlertsScreen> {
 // The map preview now uses IncidentRouteMap (flutter_map + a live route
 // from the responder's current position to the incident) instead of a
 // static image, and Accept Mission — after confirmation — launches the
-// turn-by-turn NavigationScreen.
+// turn-by-turn NavigationScreen, passing the incident's id through so
+// NavigationScreen's "Mark as Resolved" button can open
+// IncidentResolutionScreen already knowing which incident it's for.
 // ══════════════════════════════════════════════════════════════════
 
 class _IncidentDetailScreen extends StatefulWidget {
@@ -1426,6 +1530,9 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
           destinationLat: _lat,
           destinationLng: _lng,
           destinationLabel: incident['location']?.toString() ?? 'Incident',
+          incidentId: incident['id'] is int
+              ? incident['id'] as int
+              : int.tryParse('${incident['id']}'),
         ),
       ),
     );

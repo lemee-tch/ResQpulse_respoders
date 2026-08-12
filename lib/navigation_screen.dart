@@ -5,6 +5,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
+import 'incident_resolution.dart';
 
 const Color _navy = Color(0xFF0D1B4C);
 const Color _green = Color(0xFF2E9E3F);
@@ -15,16 +16,24 @@ const Color _green = Color(0xFF2E9E3F);
 /// and a bottom card with distance / ETA / estimated arrival plus a
 /// "Start Navigation" button that hands off to the device's Maps app
 /// for live turn-by-turn guidance.
+///
+/// Also offers "Mark as Resolved" once the responder is done on scene —
+/// opens IncidentResolutionScreen to collect closing notes + an optional
+/// photo. [incidentId] is passed through so that screen can eventually
+/// call a real resolve endpoint (see IncidentResolutionScreen doc
+/// comment for the current TODO(backend) status).
 class NavigationScreen extends StatefulWidget {
   final double destinationLat;
   final double destinationLng;
   final String destinationLabel;
+  final int? incidentId;
 
   const NavigationScreen({
     super.key,
     required this.destinationLat,
     required this.destinationLng,
     required this.destinationLabel,
+    this.incidentId,
   });
 
   @override
@@ -252,6 +261,21 @@ class _NavigationScreenState extends State<NavigationScreen> {
         ),
       );
     }
+  }
+
+  /// Opens the closing-notes / optional-photo screen. Reachable any time
+  /// once a route has resolved — a responder may mark resolved without
+  /// ever tapping "Start Navigation" (e.g. they drove there manually).
+  void _handleMarkResolved() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => IncidentResolutionScreen(
+          incidentId: widget.incidentId,
+          incidentLabel: widget.destinationLabel,
+        ),
+      ),
+    );
   }
 
   @override
@@ -546,6 +570,31 @@ class _NavigationScreenState extends State<NavigationScreen> {
                                 style: TextStyle(
                                   fontWeight: FontWeight.bold,
                                   letterSpacing: 0.5,
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          SizedBox(
+                            width: double.infinity,
+                            height: 52,
+                            child: OutlinedButton(
+                              onPressed: _handleMarkResolved,
+                              style: OutlinedButton.styleFrom(
+                                side: const BorderSide(
+                                  color: _green,
+                                  width: 1.6,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(28),
+                                ),
+                              ),
+                              child: const Text(
+                                'MARK AS RESOLVED',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  letterSpacing: 0.5,
+                                  color: _green,
                                 ),
                               ),
                             ),

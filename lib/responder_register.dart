@@ -1,5 +1,7 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 import 'api_service.dart';
 import 'responder_login.dart';
 import 'verify_email.dart';
@@ -23,7 +25,6 @@ class _ResponderRegisterScreenState extends State<ResponderRegisterScreen> {
   final _lastNameController = TextEditingController();
   final _suffixController = TextEditingController();
   final _badgeController = TextEditingController();
-  final _unitController = TextEditingController();
   final _mobileController = TextEditingController();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
@@ -36,6 +37,15 @@ class _ResponderRegisterScreenState extends State<ResponderRegisterScreen> {
   // True once the OTP has been verified — locks the fields and switches
   // the primary button into "confirm & create" mode.
   bool _otpVerified = false;
+
+  // ── Valid ID (badge/ID photo) ──────────────────────────────────────
+  // Required by the backend (ResponderAuthController::register — see
+  // 'valid_id' => ['required', 'file', 'image', 'max:5120']). Replaces
+  // the old Unit/Station text field, which wasn't required for anything
+  // downstream and just added friction to registration.
+  File? _uploadedFile;
+  String? _uploadedFileName;
+  final ImagePicker _picker = ImagePicker();
 
   static const List<Map<String, String>> _agencies = [
     {'value': 'SARS', 'label': 'SARS (Search and Rescue)'},
@@ -52,11 +62,353 @@ class _ResponderRegisterScreenState extends State<ResponderRegisterScreen> {
     _lastNameController.dispose();
     _suffixController.dispose();
     _badgeController.dispose();
-    _unitController.dispose();
     _mobileController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
     super.dispose();
+  }
+
+  Future<void> _pickImage(ImageSource source) async {
+    try {
+      final XFile? picked = await _picker.pickImage(
+        source: source,
+        imageQuality: 85,
+        maxWidth: 1200,
+      );
+      if (picked != null) {
+        setState(() {
+          _uploadedFile = File(picked.path);
+          _uploadedFileName = picked.name;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              source == ImageSource.camera
+                  ? 'ID photo captured!'
+                  : 'ID uploaded from gallery!',
+            ),
+            backgroundColor: source == ImageSource.camera
+                ? _navy
+                : const Color(0xFF00897B),
+          ),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Could not access ${source == ImageSource.camera ? 'camera' : 'gallery'}: $e',
+          ),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  void _handleUploadID() {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Upload Badge / Valid ID',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF1A1A2E),
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Choose how you want to upload your ID',
+                style: TextStyle(fontSize: 13, color: Colors.grey[500]),
+              ),
+              const SizedBox(height: 20),
+              Row(
+                children: [
+                  Expanded(
+                    child: _sourceOption(
+                      ctx: ctx,
+                      icon: Icons.camera_alt_outlined,
+                      label: 'Camera',
+                      subtitle: 'Take a photo',
+                      color: _navy,
+                      onTap: () {
+                        Navigator.pop(ctx);
+                        _pickImage(ImageSource.camera);
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: _sourceOption(
+                      ctx: ctx,
+                      icon: Icons.photo_library_outlined,
+                      label: 'Gallery',
+                      subtitle: 'Choose from files',
+                      color: const Color(0xFF00897B),
+                      onTap: () {
+                        Navigator.pop(ctx);
+                        _pickImage(ImageSource.gallery);
+                      },
+                    ),
+                  ),
+                ],
+              ),
+              if (_uploadedFileName != null) ...[
+                const SizedBox(height: 12),
+                GestureDetector(
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    setState(() {
+                      _uploadedFileName = null;
+                      _uploadedFile = null;
+                    });
+                  },
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    decoration: BoxDecoration(
+                      color: Colors.red[50],
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.red[200]!),
+                    ),
+                    child: const Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.delete_outline, color: Colors.red, size: 18),
+                        SizedBox(width: 8),
+                        Text(
+                          'Remove ID',
+                          style: TextStyle(
+                            color: Colors.red,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _sourceOption({
+    required BuildContext ctx,
+    required IconData icon,
+    required String label,
+    required String subtitle,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 20),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.07),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: color.withOpacity(0.25), width: 1.5),
+        ),
+        child: Column(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.12),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(icon, color: color, size: 28),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              label,
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: 14,
+                color: color,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              subtitle,
+              style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildUploadIDCard() {
+    final bool uploaded = _uploadedFileName != null;
+    final bool enabled = !_otpVerified;
+
+    return GestureDetector(
+      onTap: enabled ? _handleUploadID : null,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 300),
+        width: double.infinity,
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: uploaded ? const Color(0xFFE8F5E9) : const Color(0xFFF8F9FF),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: uploaded ? const Color(0xFF2E7D32) : Colors.grey[300]!,
+            width: 1.5,
+          ),
+        ),
+        child: uploaded
+            ? Row(
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(10),
+                    child: _uploadedFile != null
+                        ? Image.file(
+                            _uploadedFile!,
+                            width: 56,
+                            height: 56,
+                            fit: BoxFit.cover,
+                          )
+                        : Container(
+                            width: 56,
+                            height: 56,
+                            color: const Color(0xFF2E7D32).withOpacity(0.12),
+                            child: const Icon(
+                              Icons.check_circle_outline,
+                              color: Color(0xFF2E7D32),
+                              size: 26,
+                            ),
+                          ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'ID Uploaded',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 15,
+                            color: Color(0xFF2E7D32),
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          _uploadedFileName!,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey[600],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (enabled)
+                    GestureDetector(
+                      onTap: () => setState(() {
+                        _uploadedFileName = null;
+                        _uploadedFile = null;
+                      }),
+                      child: Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(
+                          color: Colors.red[50],
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.close,
+                          color: Colors.red,
+                          size: 16,
+                        ),
+                      ),
+                    ),
+                ],
+              )
+            : Column(
+                children: [
+                  Container(
+                    width: 56,
+                    height: 56,
+                    decoration: BoxDecoration(
+                      color: _navy.withOpacity(0.08),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.badge_outlined,
+                      color: _navy,
+                      size: 28,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Upload Badge / Valid ID',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 15,
+                      color: _navy,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Tap to upload from camera or gallery',
+                    style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+                  ),
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: _navy.withOpacity(0.08),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.camera_alt_outlined,
+                          size: 14,
+                          color: Colors.grey[600],
+                        ),
+                        const SizedBox(width: 6),
+                        Icon(
+                          Icons.photo_library_outlined,
+                          size: 14,
+                          color: Colors.grey[600],
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          'Camera or Gallery',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.grey[600],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+      ),
+    );
   }
 
   /// Step 1 — validates the form and requests the OTP. Pushes the OTP
@@ -64,6 +416,14 @@ class _ResponderRegisterScreenState extends State<ResponderRegisterScreen> {
   /// so we can come back to it for the confirm step).
   Future<void> _handleSendCode() async {
     if (!_formKey.currentState!.validate()) return;
+
+    if (_uploadedFile == null) {
+      setState(
+        () =>
+            _errorMessage = 'Please upload your badge or valid ID to continue.',
+      );
+      return;
+    }
 
     setState(() {
       _isLoading = true;
@@ -77,10 +437,10 @@ class _ResponderRegisterScreenState extends State<ResponderRegisterScreen> {
       suffix: _suffixController.text.trim(),
       badgeNumber: _badgeController.text.trim(),
       agency: _agency,
-      unitStation: _unitController.text.trim(),
       mobile: _mobileController.text.trim(),
       email: _emailController.text.trim(),
       password: _passwordController.text,
+      validId: _uploadedFile!,
     );
 
     if (!mounted) return;
@@ -322,15 +682,6 @@ class _ResponderRegisterScreenState extends State<ResponderRegisterScreen> {
                 const SizedBox(height: 14),
 
                 _field(
-                  _unitController,
-                  'Unit / Station',
-                  Icons.location_city_outlined,
-                  required: false,
-                  enabled: fieldsEnabled,
-                ),
-                const SizedBox(height: 14),
-
-                _field(
                   _mobileController,
                   'Mobile Number',
                   Icons.phone_outlined,
@@ -389,6 +740,18 @@ class _ResponderRegisterScreenState extends State<ResponderRegisterScreen> {
                     return null;
                   },
                 ),
+                const SizedBox(height: 20),
+
+                const Text(
+                  'Badge / Valid ID *',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF444466),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                _buildUploadIDCard(),
 
                 const SizedBox(height: 32),
 

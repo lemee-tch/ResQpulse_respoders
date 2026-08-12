@@ -113,6 +113,9 @@ class _IncidentDetailScreenState extends State<IncidentDetailScreen> {
           destinationLng: _lng!,
           destinationLabel:
               widget.incident['location']?.toString() ?? 'Incident',
+          incidentId: widget.incident['id'] is int
+              ? widget.incident['id'] as int
+              : int.tryParse('${widget.incident['id']}'),
         ),
       ),
     );
