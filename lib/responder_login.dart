@@ -4,6 +4,7 @@ import 'api_service.dart';
 import 'responder_register.dart';
 import 'responder_home.dart';
 import 'verify_email.dart';
+import 'forgot_password.dart';
 
 const Color _navy = Color(0xFF0D1B4C);
 const Color _blue = Color(0xFF1857C4);
@@ -74,6 +75,13 @@ class _ResponderLoginScreenState extends State<ResponderLoginScreen> {
         ),
       );
     }
+  }
+
+  void _handleForgotPassword() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const ResponderForgotPasswordScreen()),
+    );
   }
 
   @override
@@ -161,15 +169,7 @@ class _ResponderLoginScreenState extends State<ResponderLoginScreen> {
                 Align(
                   alignment: Alignment.centerRight,
                   child: TextButton(
-                    onPressed: () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text(
-                            'Contact your agency admin to reset your password.',
-                          ),
-                        ),
-                      );
-                    },
+                    onPressed: _handleForgotPassword,
                     style: TextButton.styleFrom(
                       padding: EdgeInsets.zero,
                       minimumSize: Size.zero,

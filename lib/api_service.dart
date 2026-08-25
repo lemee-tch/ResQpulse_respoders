@@ -236,6 +236,64 @@ class ApiService {
     }
   }
 
+  /// Step 1 of "Forgot Password" — requests a 6-digit reset code be
+  /// emailed to the responder. Same "always return success, don't reveal
+  /// whether the email exists" pattern as the citizen app
+  /// (ApiService.forgotPassword) and the admin panel
+  /// (AuthController::sendResetOtp).
+  static Future<ApiResponse> responderForgotPassword({
+    required String email,
+  }) async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$baseUrl/responder/forgot-password'),
+            headers: _baseHeaders,
+            body: jsonEncode({'email': email}),
+          )
+          .timeout(const Duration(seconds: 15));
+
+      final data = jsonDecode(response.body);
+
+      if (response.statusCode == 200) {
+        return ApiResponse.success(data);
+      }
+      return ApiResponse.error(data['message'] ?? 'Something went wrong.');
+    } catch (e) {
+      return ApiResponse.error(_handleError(e));
+    }
+  }
+
+  /// Step 2 of "Forgot Password" — submits the code + new password.
+  static Future<ApiResponse> responderResetPassword({
+    required String email,
+    required String otp,
+    required String password,
+  }) async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$baseUrl/responder/reset-password'),
+            headers: _baseHeaders,
+            body: jsonEncode({
+              'email': email,
+              'otp': otp,
+              'password': password,
+            }),
+          )
+          .timeout(const Duration(seconds: 15));
+
+      final data = jsonDecode(response.body);
+
+      if (response.statusCode == 200) {
+        return ApiResponse.success(data);
+      }
+      return ApiResponse.error(data['message'] ?? 'Invalid or expired code.');
+    } catch (e) {
+      return ApiResponse.error(_handleError(e));
+    }
+  }
+
   static Future<ApiResponse> getResponderMe() async {
     try {
       final headers = await _responderAuthHeaders();
