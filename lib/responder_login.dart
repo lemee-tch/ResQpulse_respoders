@@ -1,14 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'api_service.dart';
-import 'responder_register.dart';
 import 'responder_home.dart';
-import 'verify_email.dart';
-import 'forgot_password.dart';
 
 const Color _navy = Color(0xFF0D1B4C);
 const Color _blue = Color(0xFF1857C4);
 
+/// Login-only entry point for the responder app. There is no
+/// self-registration anymore — every agency (PNP, BFP, SARS, HCU, MSWD)
+/// has ONE pre-built, shared account created by the MDRRMO admin (see
+/// ResponderSeeder / the admin panel's "Responder Accounts" page). Any
+/// number of staff within an agency sign in with the same credentials on
+/// their own devices; there's nothing here for an individual to register.
 class ResponderLoginScreen extends StatefulWidget {
   const ResponderLoginScreen({super.key});
 
@@ -54,20 +57,6 @@ class _ResponderLoginScreenState extends State<ResponderLoginScreen> {
     } else {
       if (!mounted) return;
 
-      final needsVerificationEmail = (result.data is Map)
-          ? result.data['email'] as String?
-          : null;
-
-      if (needsVerificationEmail != null) {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) =>
-                ResponderVerifyEmailScreen(email: needsVerificationEmail),
-          ),
-        );
-      }
-
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(result.error ?? 'Login failed'),
@@ -75,13 +64,6 @@ class _ResponderLoginScreenState extends State<ResponderLoginScreen> {
         ),
       );
     }
-  }
-
-  void _handleForgotPassword() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const ResponderForgotPasswordScreen()),
-    );
   }
 
   @override
@@ -124,13 +106,13 @@ class _ResponderLoginScreenState extends State<ResponderLoginScreen> {
                 TextFormField(
                   controller: _emailController,
                   keyboardType: TextInputType.emailAddress,
-                  decoration: _inputDecoration('Email'),
+                  decoration: _inputDecoration('Agency Email'),
                   validator: (v) {
                     if (v == null || v.isEmpty) {
-                      return 'Please enter your email';
+                      return 'Please enter your agency email';
                     }
                     if (!RegExp(
-                      r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$',
+                      r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,}$',
                     ).hasMatch(v)) {
                       return 'Please enter a valid email';
                     }
@@ -169,7 +151,15 @@ class _ResponderLoginScreenState extends State<ResponderLoginScreen> {
                 Align(
                   alignment: Alignment.centerRight,
                   child: TextButton(
-                    onPressed: _handleForgotPassword,
+                    onPressed: () {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            'Contact your MDRRMO admin to reset your agency\'s password.',
+                          ),
+                        ),
+                      );
+                    },
                     style: TextButton.styleFrom(
                       padding: EdgeInsets.zero,
                       minimumSize: Size.zero,
@@ -223,32 +213,6 @@ class _ResponderLoginScreenState extends State<ResponderLoginScreen> {
                 ),
 
                 const SizedBox(height: 28),
-
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      "Dont have an account? ",
-                      style: TextStyle(color: Colors.grey[600], fontSize: 14),
-                    ),
-                    GestureDetector(
-                      onTap: () => Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => const ResponderRegisterScreen(),
-                        ),
-                      ),
-                      child: const Text(
-                        'Register',
-                        style: TextStyle(
-                          color: _blue,
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
               ],
             ),
           ),
@@ -289,7 +253,7 @@ class _ResponderLoginScreenState extends State<ResponderLoginScreen> {
   }
 }
 
-/// Shield/logo badge used on the responder login/register/home screens.
+/// Shield/logo badge used on the responder login screen.
 class _ShieldBadge extends StatelessWidget {
   final double size;
 
