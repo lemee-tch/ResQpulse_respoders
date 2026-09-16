@@ -9,7 +9,7 @@ class ApiService {
   // Android emulator:        'http://10.0.2.2:8000/api'
   // Real device on same WiFi: 'http://192.168.1.X:8000/api'
   // Live server:              'https://yourdomain.com/api'
-  static const String baseUrl = 'http://192.168.1.2:8000/api';
+  static const String baseUrl = 'http://resqpulse.com/api';
 
   static const Map<String, String> _baseHeaders = {
     'Content-Type': 'application/json',
@@ -427,6 +427,57 @@ class ApiService {
         return ApiResponse.success(data);
       }
       return ApiResponse.error(data['message'] ?? 'Could not update status.');
+    } catch (e) {
+      return ApiResponse.error(_handleError(e));
+    }
+  }
+
+  /// MSWD-only, same gate as createEvacuationCenter/updateEvacuationCenterStatus
+  /// above — logs one evacuee (one row per person, not per household) at
+  /// a specific center. Arrival only; there's no matching "check out"
+  /// call, by design (see the backend's Evacuee model doc comment).
+  static Future<ApiResponse> logEvacuee({
+    required int centerId,
+    required String firstName,
+    String? middleName,
+    required String lastName,
+    String? suffix,
+    String? contactNumber,
+    required String barangay,
+    required String gender,
+    required int age,
+  }) async {
+    try {
+      final headers = await _responderAuthHeaders();
+      final response = await http
+          .post(
+            Uri.parse('$baseUrl/evacuation-centers/$centerId/evacuees'),
+            headers: headers,
+            body: jsonEncode({
+              'first_name': firstName,
+              'middle_name': middleName,
+              'last_name': lastName,
+              'suffix': suffix,
+              'contact_number': contactNumber,
+              'barangay': barangay,
+              'gender': gender,
+              'age': age,
+            }),
+          )
+          .timeout(const Duration(seconds: 15));
+
+      final data = jsonDecode(response.body);
+
+      if (response.statusCode == 201) {
+        return ApiResponse.success(data);
+      }
+      if (data['errors'] != null) {
+        final errors = data['errors'] as Map<String, dynamic>;
+        final firstError = errors.values.first;
+        final msg = firstError is List ? firstError.first : firstError;
+        return ApiResponse.error(msg.toString());
+      }
+      return ApiResponse.error(data['message'] ?? 'Could not log evacuee.');
     } catch (e) {
       return ApiResponse.error(_handleError(e));
     }

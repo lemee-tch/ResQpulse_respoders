@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Responders</string>
+	<string>ResQPulse Responder</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -26,6 +26,21 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>ResQPulse Responder needs camera access so you can attach a photo when resolving an incident.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>ResQPulse Responder needs photo library access so you can attach an existing photo when resolving an incident.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>ResQPulse Responder needs your location to navigate to incidents and confirm when you've arrived on scene.</string>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>tel</string>
+	</array>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+		<string>remote-notification</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

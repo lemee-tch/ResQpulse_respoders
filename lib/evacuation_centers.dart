@@ -5,6 +5,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'api_service.dart';
 import 'add_evacuation.dart';
+import 'log_evacuee_screen.dart';
 
 const Color _gradientTop = Color(0xFF00308F);
 const Color _navy = Color(0xFF0D1B4C);
@@ -549,6 +550,39 @@ class _ResponderEvacuationCentersScreenState
                                           color: _gradientTop,
                                         ),
                                       ),
+                                      if (widget.isMswd) ...[
+                                        const SizedBox(height: 6),
+                                        GestureDetector(
+                                          onTap: () => Navigator.push(
+                                            context,
+                                            MaterialPageRoute(
+                                              builder: (_) => LogEvacueeScreen(
+                                                centerId: center.id,
+                                                centerName: center.name,
+                                              ),
+                                            ),
+                                          ),
+                                          child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Icon(
+                                                Icons.how_to_reg,
+                                                size: 13,
+                                                color: _gradientTop,
+                                              ),
+                                              const SizedBox(width: 4),
+                                              Text(
+                                                'Log Evacuee',
+                                                style: TextStyle(
+                                                  fontSize: 11.5,
+                                                  fontWeight: FontWeight.w700,
+                                                  color: _gradientTop,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
                                     ],
                                   ),
                                 ),
