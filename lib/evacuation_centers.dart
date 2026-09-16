@@ -9,12 +9,13 @@ import 'add_evacuation.dart';
 const Color _gradientTop = Color(0xFF00308F);
 const Color _navy = Color(0xFF0D1B4C);
 
-/// Evacuation Centers — read-only for every responder (view where centers
+/// Evacuation Centers — read-only for most responders (view where centers
 /// are, their capacity/status, and distance from current position).
 ///
 /// If [isMswd] is true, a floating "+" button is shown that jumps straight
-/// to AddEvacuationCenterScreen — MSWD is the only agency allowed to add
-/// centers (enforced server-side too), everyone else just gets the list.
+/// to AddEvacuationCenterScreen, AND the status pill on each card becomes
+/// tappable — MSWD is the only agency allowed to add or update centers
+/// (enforced server-side too), everyone else just gets the read-only list.
 class ResponderEvacuationCentersScreen extends StatefulWidget {
   final bool isMswd;
   const ResponderEvacuationCentersScreen({super.key, this.isMswd = false});
@@ -125,6 +126,67 @@ class _ResponderEvacuationCentersScreenState
         return Colors.grey;
       default:
         return const Color(0xFF2E7D32);
+    }
+  }
+
+  /// MSWD-only — matches the admin panel's inline status dropdown
+  /// (evacuation_blade.php). Everyone else's badge stays a plain
+  /// read-only pill; server-side re-checks this gate regardless (see
+  /// Api\EvacuationCenterController::updateStatus).
+  Future<void> _changeStatus(_EvacCenter center) async {
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 12),
+            Text(
+              center.name,
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Update status',
+              style: TextStyle(color: Colors.grey[600], fontSize: 12.5),
+            ),
+            const SizedBox(height: 8),
+            for (final s in const ['open', 'full', 'closed'])
+              ListTile(
+                leading: Icon(Icons.circle, size: 12, color: _statusColor(s)),
+                title: Text(_statusLabel(s)),
+                trailing: center.status == s
+                    ? const Icon(Icons.check, color: _navy)
+                    : null,
+                onTap: () => Navigator.pop(ctx, s),
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+
+    if (selected == null || selected == center.status || !mounted) return;
+
+    final result = await ApiService.updateEvacuationCenterStatus(
+      center.id,
+      selected,
+    );
+
+    if (!mounted) return;
+
+    if (result.success) {
+      _loadCenters();
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(result.error ?? 'Could not update status.'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
     }
   }
 
@@ -423,26 +485,48 @@ class _ResponderEvacuationCentersScreenState
                                               ),
                                             ),
                                           ),
-                                          Container(
-                                            padding: const EdgeInsets.symmetric(
-                                              horizontal: 8,
-                                              vertical: 3,
-                                            ),
-                                            decoration: BoxDecoration(
-                                              color: _statusColor(
-                                                center.status,
-                                              ).withOpacity(0.12),
-                                              borderRadius:
-                                                  BorderRadius.circular(20),
-                                            ),
-                                            child: Text(
-                                              _statusLabel(center.status),
-                                              style: TextStyle(
-                                                fontSize: 10.5,
-                                                fontWeight: FontWeight.bold,
+                                          GestureDetector(
+                                            onTap: widget.isMswd
+                                                ? () => _changeStatus(center)
+                                                : null,
+                                            child: Container(
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                    horizontal: 8,
+                                                    vertical: 3,
+                                                  ),
+                                              decoration: BoxDecoration(
                                                 color: _statusColor(
                                                   center.status,
-                                                ),
+                                                ).withOpacity(0.12),
+                                                borderRadius:
+                                                    BorderRadius.circular(20),
+                                              ),
+                                              child: Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  Text(
+                                                    _statusLabel(center.status),
+                                                    style: TextStyle(
+                                                      fontSize: 10.5,
+                                                      fontWeight:
+                                                          FontWeight.bold,
+                                                      color: _statusColor(
+                                                        center.status,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                  if (widget.isMswd) ...[
+                                                    const SizedBox(width: 3),
+                                                    Icon(
+                                                      Icons.edit,
+                                                      size: 10,
+                                                      color: _statusColor(
+                                                        center.status,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ],
                                               ),
                                             ),
                                           ),

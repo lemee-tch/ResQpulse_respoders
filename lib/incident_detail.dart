@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'api_service.dart';
 import 'route_map.dart';
 import 'navigation_screen.dart';
 
@@ -24,6 +25,48 @@ class IncidentDetailScreen extends StatefulWidget {
 class _IncidentDetailScreenState extends State<IncidentDetailScreen> {
   bool _isResponding = false;
 
+  // Mutable local copy so a successful accept/decline can update the
+  // status + responders list in place without needing the caller
+  // (responder_home.dart's list) to refetch just to reflect this screen.
+  late Map<String, dynamic> _incident;
+
+  // The signed-in responder's own id — needed to tell "someone else has
+  // already accepted this" (show BACKUP MISSION) apart from "I'm already
+  // on this incident myself" (show ALREADY RESPONDING, no network call).
+  int? _myResponderId;
+
+  @override
+  void initState() {
+    super.initState();
+    _incident = Map<String, dynamic>.from(widget.incident);
+    ApiService.getResponder().then((responder) {
+      if (!mounted || responder == null) return;
+      setState(() => _myResponderId = responder['id'] as int?);
+    });
+  }
+
+  List<dynamic> get _responders =>
+      (_incident['responders'] as List<dynamic>?) ?? const [];
+
+  bool get _iAmAlreadyResponding =>
+      _myResponderId != null &&
+      _responders.any((r) => r is Map && r['id'] == _myResponderId);
+
+  /// Someone (anyone) has already accepted — tapping now joins as backup
+  /// support rather than being the first responder on scene.
+  bool get _isBackupJoin =>
+      !_iAmAlreadyResponding &&
+      (_incident['status'] == 'responding' || _responders.isNotEmpty);
+
+  bool get _isResolved => _incident['status'] == 'resolved';
+
+  String get _acceptButtonLabel {
+    if (_isResolved) return 'RESOLVED';
+    if (_iAmAlreadyResponding) return 'CONTINUE TO SCENE';
+    if (_isBackupJoin) return 'BACKUP MISSION';
+    return 'ACCEPT MISSION';
+  }
+
   static const Map<String, IconData> _typeIcons = {
     'Fire': Icons.local_fire_department_outlined,
     'Flood': Icons.water_outlined,
@@ -35,20 +78,18 @@ class _IncidentDetailScreenState extends State<IncidentDetailScreen> {
   };
 
   IconData get _icon =>
-      _typeIcons[widget.incident['emergency_type']] ??
-      Icons.warning_amber_rounded;
+      _typeIcons[_incident['emergency_type']] ?? Icons.warning_amber_rounded;
 
-  double? get _lat => double.tryParse('${widget.incident['latitude']}');
-  double? get _lng => double.tryParse('${widget.incident['longitude']}');
+  double? get _lat => double.tryParse('${_incident['latitude']}');
+  double? get _lng => double.tryParse('${_incident['longitude']}');
 
   String get _reporterName =>
-      widget.incident['citizen']?['full_name']?.toString() ?? 'Unknown';
+      _incident['citizen']?['full_name']?.toString() ?? 'Unknown';
 
-  String? get _reporterMobile =>
-      widget.incident['citizen']?['mobile']?.toString();
+  String? get _reporterMobile => _incident['citizen']?['mobile']?.toString();
 
   String get _formattedDate {
-    final raw = widget.incident['created_at']?.toString();
+    final raw = _incident['created_at']?.toString();
     final date = DateTime.tryParse(raw ?? '');
     if (date == null) return '';
     const months = [
@@ -81,10 +122,10 @@ class _IncidentDetailScreenState extends State<IncidentDetailScreen> {
     }
   }
 
-  /// TODO(backend): wire this to a real endpoint once one exists, e.g.
-  /// POST /api/responder/incidents/{id}/accept — there is currently no
-  /// responder-facing route to change an incident's status; only the
-  /// admin panel (IncidentController::updateStatus, web.php) can.
+  /// Accepts (or, if someone's already on it, joins as backup on) this
+  /// incident via POST /api/responder/incidents/{id}/accept. If I'm
+  /// already on the incident myself, there's nothing to call — just go
+  /// straight to navigation.
   Future<void> _handleAccept() async {
     if (_lat == null || _lng == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -96,26 +137,64 @@ class _IncidentDetailScreenState extends State<IncidentDetailScreen> {
       return;
     }
 
+    if (_iAmAlreadyResponding) {
+      _goToNavigation();
+      return;
+    }
+
     setState(() => _isResponding = true);
 
-    // Placeholder — replace with a real ApiService call, e.g.:
-    // final result = await ApiService.acceptIncident(widget.incident['id']);
-    await Future.delayed(const Duration(milliseconds: 600));
+    final result = await ApiService.acceptIncident(
+      _incident['id'] is int
+          ? _incident['id'] as int
+          : int.tryParse('${_incident['id']}') ?? 0,
+    );
 
     if (!mounted) return;
     setState(() => _isResponding = false);
 
+    if (!result.success) {
+      // A 409 here means the incident was resolved before this tap
+      // landed — refresh the local copy (if the backend sent one back)
+      // so the button/labels reflect reality instead of retrying blind.
+      if (result.data is Map && result.data['incident'] != null) {
+        setState(
+          () => _incident = Map<String, dynamic>.from(
+            result.data['incident'] as Map,
+          ),
+        );
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(result.error ?? 'Could not accept this mission.'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+      return;
+    }
+
+    if (result.data is Map && result.data['incident'] != null) {
+      setState(
+        () => _incident = Map<String, dynamic>.from(
+          result.data['incident'] as Map,
+        ),
+      );
+    }
+
+    _goToNavigation();
+  }
+
+  void _goToNavigation() {
     Navigator.pushReplacement(
       context,
       MaterialPageRoute(
         builder: (_) => NavigationScreen(
           destinationLat: _lat!,
           destinationLng: _lng!,
-          destinationLabel:
-              widget.incident['location']?.toString() ?? 'Incident',
-          incidentId: widget.incident['id'] is int
-              ? widget.incident['id'] as int
-              : int.tryParse('${widget.incident['id']}'),
+          destinationLabel: _incident['location']?.toString() ?? 'Incident',
+          incidentId: _incident['id'] is int
+              ? _incident['id'] as int
+              : int.tryParse('${_incident['id']}'),
         ),
       ),
     );
@@ -147,15 +226,23 @@ class _IncidentDetailScreenState extends State<IncidentDetailScreen> {
     if (confirmed != true) return;
     if (!mounted) return;
 
-    // TODO(backend): same as accept — no decline endpoint exists yet.
+    // Fire-and-forget-ish: decline has no real server effect for this
+    // responder today (see ApiService.declineIncident), so the screen
+    // closes regardless of whether the request itself succeeds.
+    ApiService.declineIncident(
+      _incident['id'] is int
+          ? _incident['id'] as int
+          : int.tryParse('${_incident['id']}') ?? 0,
+    );
+
     Navigator.pop(context);
   }
 
   @override
   Widget build(BuildContext context) {
-    final type = widget.incident['emergency_type']?.toString() ?? 'Unknown';
-    final location = widget.incident['location']?.toString() ?? '—';
-    final description = widget.incident['description']?.toString() ?? '';
+    final type = _incident['emergency_type']?.toString() ?? 'Unknown';
+    final location = _incident['location']?.toString() ?? '—';
+    final description = _incident['description']?.toString() ?? '';
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -304,10 +391,15 @@ class _IncidentDetailScreenState extends State<IncidentDetailScreen> {
                       width: double.infinity,
                       height: 52,
                       child: ElevatedButton(
-                        onPressed: _isResponding ? null : _handleAccept,
+                        onPressed: (_isResponding || _isResolved)
+                            ? null
+                            : _handleAccept,
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF2E7D32),
+                          backgroundColor: _isBackupJoin
+                              ? const Color(0xFFEF6C00)
+                              : const Color(0xFF2E7D32),
                           foregroundColor: Colors.white,
+                          disabledBackgroundColor: Colors.grey[400],
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(28),
                           ),
@@ -321,9 +413,9 @@ class _IncidentDetailScreenState extends State<IncidentDetailScreen> {
                                   strokeWidth: 2.5,
                                 ),
                               )
-                            : const Text(
-                                'ACCEPT MISSION',
-                                style: TextStyle(
+                            : Text(
+                                _acceptButtonLabel,
+                                style: const TextStyle(
                                   fontWeight: FontWeight.bold,
                                   letterSpacing: 0.5,
                                 ),
@@ -335,7 +427,9 @@ class _IncidentDetailScreenState extends State<IncidentDetailScreen> {
                       width: double.infinity,
                       height: 52,
                       child: OutlinedButton(
-                        onPressed: _isResponding ? null : _handleDecline,
+                        onPressed: (_isResponding || _isResolved)
+                            ? null
+                            : _handleDecline,
                         style: OutlinedButton.styleFrom(
                           side: BorderSide(
                             color: Colors.grey[300]!,

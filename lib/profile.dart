@@ -88,7 +88,6 @@ class _ResponderProfileScreenState extends State<ResponderProfileScreen> {
   @override
   Widget build(BuildContext context) {
     final String name = _responder?['full_name'] ?? 'Responder';
-    final String badge = _responder?['badge_number']?.toString() ?? '—';
     final String email = _responder?['email']?.toString() ?? '';
 
     return Scaffold(
@@ -140,17 +139,6 @@ class _ResponderProfileScreenState extends State<ResponderProfileScreen> {
                         fontSize: 20,
                         fontWeight: FontWeight.bold,
                         color: _ink,
-                      ),
-                    ),
-
-                    const SizedBox(height: 4),
-
-                    Text(
-                      'Badge # $badge',
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.grey[500],
                       ),
                     ),
 

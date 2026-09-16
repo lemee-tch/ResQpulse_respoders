@@ -61,146 +61,12 @@ class ApiService {
   }
 
   // ── RESPONDER AUTH ────────────────────────────────────────────────
-
-  /// Multipart — the backend requires a valid_id photo (see
-  /// ResponderAuthController::register), which a plain JSON POST can
-  /// never carry. `unit_station` was removed from the form entirely (see
-  /// responder_register.dart) in favor of this required ID upload, so it
-  /// isn't sent here — the backend column is nullable, so simply not
-  /// sending it is fine.
-  static Future<ApiResponse> responderRegister({
-    required String firstName,
-    String? middleName,
-    required String lastName,
-    String? suffix,
-    required String badgeNumber,
-    required String agency,
-    required String mobile,
-    required String email,
-    required String password,
-    required File validId,
-  }) async {
-    try {
-      final uri = Uri.parse('$baseUrl/responder/register');
-      final request = http.MultipartRequest('POST', uri);
-
-      request.headers['Accept'] = 'application/json';
-      request.fields['first_name'] = firstName;
-      if (middleName != null && middleName.isNotEmpty) {
-        request.fields['middle_name'] = middleName;
-      }
-      request.fields['last_name'] = lastName;
-      if (suffix != null && suffix.isNotEmpty) {
-        request.fields['suffix'] = suffix;
-      }
-      request.fields['badge_number'] = badgeNumber;
-      request.fields['agency'] = agency;
-      request.fields['mobile'] = mobile;
-      request.fields['email'] = email;
-      request.fields['password'] = password;
-
-      request.files.add(
-        await http.MultipartFile.fromPath('valid_id', validId.path),
-      );
-
-      final streamedResponse = await request.send().timeout(
-        const Duration(seconds: 20),
-      );
-      final response = await http.Response.fromStream(streamedResponse);
-      final data = jsonDecode(response.body);
-
-      if (response.statusCode == 200) {
-        // OTP sent — no account exists yet.
-        return ApiResponse.success(data);
-      }
-      if (data['errors'] != null) {
-        final errors = data['errors'] as Map<String, dynamic>;
-        final firstError = errors.values.first;
-        final msg = firstError is List ? firstError.first : firstError;
-        return ApiResponse.error(msg.toString());
-      }
-      return ApiResponse.error(data['message'] ?? 'Registration failed.');
-    } catch (e) {
-      return ApiResponse.error(_handleError(e));
-    }
-  }
-
-  /// Step 2 — verifies the OTP only. No account is created and no token
-  /// is returned; the person still has to confirm their details.
-  static Future<ApiResponse> responderVerifyEmail({
-    required String email,
-    required String otp,
-  }) async {
-    try {
-      final response = await http
-          .post(
-            Uri.parse('$baseUrl/responder/verify-email'),
-            headers: _baseHeaders,
-            body: jsonEncode({'email': email, 'otp': otp}),
-          )
-          .timeout(const Duration(seconds: 15));
-
-      final data = jsonDecode(response.body);
-
-      if (response.statusCode == 200) {
-        return ApiResponse.success(data);
-      }
-      return ApiResponse.error(data['message'] ?? 'Invalid or expired code.');
-    } catch (e) {
-      return ApiResponse.error(_handleError(e));
-    }
-  }
-
-  /// Step 3 — actually creates the responder account. Returns no token;
-  /// the person logs in manually afterward.
-  static Future<ApiResponse> responderConfirmRegistration({
-    required String email,
-  }) async {
-    try {
-      final response = await http
-          .post(
-            Uri.parse('$baseUrl/responder/confirm-registration'),
-            headers: _baseHeaders,
-            body: jsonEncode({'email': email}),
-          )
-          .timeout(const Duration(seconds: 15));
-
-      final data = jsonDecode(response.body);
-
-      if (response.statusCode == 201) {
-        return ApiResponse.success(data);
-      }
-      if (data['errors'] != null) {
-        final errors = data['errors'] as Map<String, dynamic>;
-        final firstError = errors.values.first;
-        final msg = firstError is List ? firstError.first : firstError;
-        return ApiResponse.error(msg.toString());
-      }
-      return ApiResponse.error(data['message'] ?? 'Could not create account.');
-    } catch (e) {
-      return ApiResponse.error(_handleError(e));
-    }
-  }
-
-  static Future<ApiResponse> responderResendVerificationOtp({
-    required String email,
-  }) async {
-    try {
-      final response = await http
-          .post(
-            Uri.parse('$baseUrl/responder/resend-verification-otp'),
-            headers: _baseHeaders,
-            body: jsonEncode({'email': email}),
-          )
-          .timeout(const Duration(seconds: 15));
-
-      final data = jsonDecode(response.body);
-      if (response.statusCode == 200) return ApiResponse.success(data);
-      return ApiResponse.error(data['message'] ?? 'Could not resend code.');
-    } catch (e) {
-      return ApiResponse.error(_handleError(e));
-    }
-  }
+  // No self-service registration, email verification, or password
+  // reset — responder accounts are one shared login per agency,
+  // pre-created by ResponderSeeder and managed from the admin panel's
+  // "Responder Accounts" page (including password resets). login/me/
+  // logout are the only responder-auth endpoints the backend exposes;
+  // see api.php and Api\ResponderAuthController.
 
   static Future<ApiResponse> responderLogin({
     required String email,
@@ -223,72 +89,7 @@ class ApiService {
         return ApiResponse.success(data);
       }
 
-      if (response.statusCode == 403 && data['needs_verification'] == true) {
-        return ApiResponse.error(
-          data['message'] ?? 'Please verify your email first.',
-          data: {'email': data['email']},
-        );
-      }
-
       return ApiResponse.error(data['message'] ?? 'Invalid email or password.');
-    } catch (e) {
-      return ApiResponse.error(_handleError(e));
-    }
-  }
-
-  /// Step 1 of "Forgot Password" — requests a 6-digit reset code be
-  /// emailed to the responder. Same "always return success, don't reveal
-  /// whether the email exists" pattern as the citizen app
-  /// (ApiService.forgotPassword) and the admin panel
-  /// (AuthController::sendResetOtp).
-  static Future<ApiResponse> responderForgotPassword({
-    required String email,
-  }) async {
-    try {
-      final response = await http
-          .post(
-            Uri.parse('$baseUrl/responder/forgot-password'),
-            headers: _baseHeaders,
-            body: jsonEncode({'email': email}),
-          )
-          .timeout(const Duration(seconds: 15));
-
-      final data = jsonDecode(response.body);
-
-      if (response.statusCode == 200) {
-        return ApiResponse.success(data);
-      }
-      return ApiResponse.error(data['message'] ?? 'Something went wrong.');
-    } catch (e) {
-      return ApiResponse.error(_handleError(e));
-    }
-  }
-
-  /// Step 2 of "Forgot Password" — submits the code + new password.
-  static Future<ApiResponse> responderResetPassword({
-    required String email,
-    required String otp,
-    required String password,
-  }) async {
-    try {
-      final response = await http
-          .post(
-            Uri.parse('$baseUrl/responder/reset-password'),
-            headers: _baseHeaders,
-            body: jsonEncode({
-              'email': email,
-              'otp': otp,
-              'password': password,
-            }),
-          )
-          .timeout(const Duration(seconds: 15));
-
-      final data = jsonDecode(response.body);
-
-      if (response.statusCode == 200) {
-        return ApiResponse.success(data);
-      }
-      return ApiResponse.error(data['message'] ?? 'Invalid or expired code.');
     } catch (e) {
       return ApiResponse.error(_handleError(e));
     }
@@ -410,6 +211,111 @@ class ApiService {
     }
   }
 
+  /// Joins this responder onto the incident — NOT an exclusive claim.
+  /// Backup support means any number of responders (same or different
+  /// agencies) can accept the same incident; the backend just adds the
+  /// caller to the incident_responder pivot if they aren't on it
+  /// already (see IncidentController::accept()). The only real failure
+  /// case is a 409 when the incident has already been marked resolved —
+  /// that response still includes the up-to-date `incident` so the UI
+  /// can refresh its local copy instead of just showing a generic error.
+  static Future<ApiResponse> acceptIncident(int incidentId) async {
+    try {
+      final headers = await _responderAuthHeaders();
+      final response = await http
+          .post(
+            Uri.parse('$baseUrl/responder/incidents/$incidentId/accept'),
+            headers: headers,
+          )
+          .timeout(const Duration(seconds: 15));
+
+      final data = jsonDecode(response.body);
+
+      if (response.statusCode == 200) {
+        return ApiResponse.success(data);
+      }
+
+      // 409 (already claimed) and anything else both carry a message —
+      // and 409 also carries the current `incident` so the caller can
+      // refresh its local copy (e.g. to show who did accept it).
+      return ApiResponse.error(
+        data['message'] ?? 'Could not accept this mission.',
+        data: data,
+      );
+    } catch (e) {
+      return ApiResponse.error(_handleError(e));
+    }
+  }
+
+  /// Purely informational today — there's no per-responder "declined"
+  /// record kept server-side (declining just means "not me", the
+  /// incident stays open for the rest of the agency), so this never
+  /// blocks the caller's local UI update even if the request fails.
+  static Future<ApiResponse> declineIncident(int incidentId) async {
+    try {
+      final headers = await _responderAuthHeaders();
+      final response = await http
+          .post(
+            Uri.parse('$baseUrl/responder/incidents/$incidentId/decline'),
+            headers: headers,
+          )
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        return ApiResponse.success(jsonDecode(response.body));
+      }
+      return ApiResponse.error('Failed to decline.');
+    } catch (e) {
+      return ApiResponse.error(_handleError(e));
+    }
+  }
+
+  /// Marks an incident resolved from the field — see
+  /// IncidentResolutionScreen. Multipart because the photo is optional
+  /// but, when present, is a file a plain JSON POST can't carry. A 409
+  /// means someone else already resolved it moments earlier; the
+  /// response still carries the current `incident` so the caller can
+  /// update its local copy instead of just showing a generic error.
+  static Future<ApiResponse> resolveIncident(
+    int incidentId, {
+    String? notes,
+    File? photo,
+  }) async {
+    try {
+      final uri = Uri.parse('$baseUrl/responder/incidents/$incidentId/resolve');
+      final request = http.MultipartRequest('POST', uri);
+
+      final token = await getResponderToken();
+      request.headers['Accept'] = 'application/json';
+      if (token != null) request.headers['Authorization'] = 'Bearer $token';
+
+      if (notes != null && notes.isNotEmpty) {
+        request.fields['notes'] = notes;
+      }
+      if (photo != null) {
+        request.files.add(
+          await http.MultipartFile.fromPath('photo', photo.path),
+        );
+      }
+
+      final streamedResponse = await request.send().timeout(
+        const Duration(seconds: 20),
+      );
+      final response = await http.Response.fromStream(streamedResponse);
+      final data = jsonDecode(response.body);
+
+      if (response.statusCode == 200) {
+        return ApiResponse.success(data);
+      }
+      return ApiResponse.error(
+        data['message'] ?? 'Could not mark this incident resolved.',
+        data: data,
+      );
+    } catch (e) {
+      return ApiResponse.error(_handleError(e));
+    }
+  }
+
   // ── ALERTS ────────────────────────────────────────────────────────
   // Same /api/alerts endpoint the citizen app hits — it isn't guard
   // specific, so it works fine for an authenticated Responder token too.
@@ -492,6 +398,35 @@ class ApiService {
       return ApiResponse.error(
         data['message'] ?? 'Failed to add evacuation center.',
       );
+    } catch (e) {
+      return ApiResponse.error(_handleError(e));
+    }
+  }
+
+  /// The "action" for changing an existing center's status — MSWD-only,
+  /// same as create. Separate from creation (which always starts a
+  /// center at 'open') so an MSWD responder marks it full/closed later
+  /// from the centers list instead of picking a status up front.
+  static Future<ApiResponse> updateEvacuationCenterStatus(
+    int centerId,
+    String status,
+  ) async {
+    try {
+      final headers = await _responderAuthHeaders();
+      final response = await http
+          .patch(
+            Uri.parse('$baseUrl/evacuation-centers/$centerId/status'),
+            headers: headers,
+            body: jsonEncode({'status': status}),
+          )
+          .timeout(const Duration(seconds: 15));
+
+      final data = jsonDecode(response.body);
+
+      if (response.statusCode == 200) {
+        return ApiResponse.success(data);
+      }
+      return ApiResponse.error(data['message'] ?? 'Could not update status.');
     } catch (e) {
       return ApiResponse.error(_handleError(e));
     }

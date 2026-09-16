@@ -36,7 +36,10 @@ class _AddEvacuationCenterScreenState extends State<AddEvacuationCenterScreen> {
   final _capacityController = TextEditingController();
 
   String? _selectedBarangay;
-  String _status = 'open';
+  // No longer user-chosen — every new center starts 'open'. Changing it
+  // afterward (full/closed) is done as an action from the centers list
+  // (see evacuation_centers.dart) instead of being picked at creation.
+  final String _status = 'open';
 
   double? _latitude;
   double? _longitude;
@@ -381,22 +384,6 @@ class _AddEvacuationCenterScreenState extends State<AddEvacuationCenterScreen> {
                     return null;
                   },
                 ),
-                const SizedBox(height: 16),
-
-                _label('Status'),
-                const SizedBox(height: 6),
-                DropdownButtonFormField<String>(
-                  value: _status,
-                  isExpanded: true,
-                  decoration: _decoration('Status', Icons.toggle_on_outlined),
-                  items: const [
-                    DropdownMenuItem(value: 'open', child: Text('Open')),
-                    DropdownMenuItem(value: 'full', child: Text('Full')),
-                    DropdownMenuItem(value: 'closed', child: Text('Closed')),
-                  ],
-                  onChanged: (v) => setState(() => _status = v ?? 'open'),
-                ),
-
                 const SizedBox(height: 32),
 
                 SizedBox(

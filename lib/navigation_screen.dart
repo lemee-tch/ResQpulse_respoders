@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -19,9 +20,15 @@ const Color _green = Color(0xFF2E9E3F);
 ///
 /// Also offers "Mark as Resolved" once the responder is done on scene —
 /// opens IncidentResolutionScreen to collect closing notes + an optional
-/// photo. [incidentId] is passed through so that screen can eventually
-/// call a real resolve endpoint (see IncidentResolutionScreen doc
-/// comment for the current TODO(backend) status).
+/// photo, then submits to POST /api/responder/incidents/{id}/resolve
+/// (see Api\IncidentController::resolve()). [incidentId] is passed
+/// through so that call knows which incident to close out.
+///
+/// While this screen is open, a live location stream watches for the
+/// responder physically arriving at the incident (see
+/// [_arrivalThresholdMeters]) and surfaces an "You've arrived" prompt
+/// once, offering a shortcut straight to the resolve flow instead of
+/// making them find the button themselves.
 class NavigationScreen extends StatefulWidget {
   final double destinationLat;
   final double destinationLng;
@@ -62,10 +69,91 @@ class _NavigationScreenState extends State<NavigationScreen> {
   bool _isLoading = true;
   String? _errorMessage;
 
+  // ── Live arrival detection ──────────────────────────────────────
+  // Straight-line distance, checked on every GPS update — deliberately
+  // NOT re-hitting OSRM on each tick (that's for the route line/ETA
+  // shown once at load, not something worth recomputing live).
+  static const double _arrivalThresholdMeters = 50;
+  StreamSubscription<Position>? _positionSubscription;
+  bool _hasPromptedArrival = false;
+
   @override
   void initState() {
     super.initState();
     _loadRoute();
+  }
+
+  @override
+  void dispose() {
+    _positionSubscription?.cancel();
+    super.dispose();
+  }
+
+  void _startWatchingPosition() {
+    if (_positionSubscription != null) return; // already watching
+
+    _positionSubscription =
+        Geolocator.getPositionStream(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high,
+            distanceFilter: 10, // meters moved before a new reading fires
+          ),
+        ).listen((position) {
+          if (!mounted) return;
+
+          final here = LatLng(position.latitude, position.longitude);
+          setState(() => _origin = here);
+
+          if (_hasPromptedArrival) return;
+
+          final distanceToScene = Geolocator.distanceBetween(
+            here.latitude,
+            here.longitude,
+            _destination.latitude,
+            _destination.longitude,
+          );
+
+          if (distanceToScene <= _arrivalThresholdMeters) {
+            _hasPromptedArrival = true;
+            _showArrivalPrompt();
+          }
+        });
+  }
+
+  /// Auto-surfaced once, the moment the live GPS stream puts the
+  /// responder within [_arrivalThresholdMeters] of the incident. Doesn't
+  /// force navigation away — just offers the shortcut; dismissing it
+  /// leaves the responder free to still tap "MARK AS RESOLVED" manually
+  /// whenever they're actually ready.
+  void _showArrivalPrompt() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        icon: const Icon(Icons.location_on, color: _green, size: 32),
+        title: const Text("You've arrived"),
+        content: Text(
+          'Looks like you\'re at ${widget.destinationLabel}. Ready to submit your resolution report?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text('Not Yet', style: TextStyle(color: Colors.grey[600])),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: _green),
+            onPressed: () {
+              Navigator.pop(ctx);
+              _handleMarkResolved();
+            },
+            child: const Text(
+              'Mark as Resolved',
+              style: TextStyle(color: Colors.white),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _loadRoute() async {
@@ -79,6 +167,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
       final origin = LatLng(position.latitude, position.longitude);
       if (!mounted) return;
       setState(() => _origin = origin);
+      _startWatchingPosition();
 
       await _fetchRoute(origin, _destination);
 

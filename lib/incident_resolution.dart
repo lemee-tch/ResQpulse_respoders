@@ -1,22 +1,16 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'api_service.dart';
 
 const Color _navy = Color(0xFF0D1B4C);
 const Color _green = Color(0xFF2E9E4F);
 
 /// Shown after a responder taps "Mark as Resolved" on the Navigation
 /// screen (i.e. after they've accepted a mission and arrived on scene).
-/// Collects optional closing notes + an optional photo, then submits.
-///
-/// TODO(backend): there is currently no responder-facing endpoint to
-/// resolve an incident (only the admin panel can update status — see
-/// IncidentController::updateStatus / web.php). Wire _submit() below to
-/// a real call, e.g.:
-///   POST /api/responder/incidents/{id}/resolve
-///   fields: notes (nullable string), photo (nullable file)
-/// once that route exists. Until then this simulates success so the
-/// screen is fully testable.
+/// Collects optional closing notes + an optional photo, then submits to
+/// POST /api/responder/incidents/{id}/resolve (see
+/// Api\IncidentController::resolve()).
 class IncidentResolutionScreen extends StatefulWidget {
   final int? incidentId;
   final String? incidentLabel;
@@ -74,16 +68,42 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
 
   void _removePhoto() => setState(() => _photo = null);
 
-  /// TODO(backend): replace this simulated delay with a real
-  /// ApiService.resolveIncident(...) call once the endpoint exists —
-  /// see class doc comment above.
+  /// Calls the real resolve endpoint. `widget.incidentId` can legitimately
+  /// be null (see NavigationScreen — it's optional there too), in which
+  /// case there's nothing to submit to; the screen still lets the
+  /// responder close out locally rather than getting stuck.
   Future<void> _submit() async {
-    setState(() => _isSubmitting = true);
+    final incidentId = widget.incidentId;
 
-    await Future.delayed(const Duration(milliseconds: 700));
+    if (incidentId == null) {
+      Navigator.of(context).popUntil((route) => route.isFirst);
+      return;
+    }
+
+    setState(() {
+      _isSubmitting = true;
+    });
+
+    final result = await ApiService.resolveIncident(
+      incidentId,
+      notes: _notesController.text.trim().isEmpty
+          ? null
+          : _notesController.text.trim(),
+      photo: _photo,
+    );
 
     if (!mounted) return;
     setState(() => _isSubmitting = false);
+
+    if (!result.success) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(result.error ?? 'Could not mark this resolved.'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+      return;
+    }
 
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
