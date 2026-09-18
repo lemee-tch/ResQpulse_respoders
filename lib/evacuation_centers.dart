@@ -38,6 +38,7 @@ class _ResponderEvacuationCentersScreenState
   int? _selectedIndex;
   LatLng? _userLocation;
   bool _isLocating = false;
+  String? _selectedBarangayFilter;
 
   @override
   void initState() {
@@ -99,6 +100,26 @@ class _ResponderEvacuationCentersScreenState
     } finally {
       if (mounted) setState(() => _isLocating = false);
     }
+  }
+
+  /// Every distinct barangay actually present among loaded centers —
+  /// populates the filter dropdown with only options that would ever
+  /// return a result, instead of the full 37-barangay municipal list
+  /// where most entries might have zero centers.
+  List<String> get _barangaysInCenters {
+    final set = _centers
+        .map((c) => c.barangay)
+        .where((b) => b.isNotEmpty)
+        .toSet();
+    final list = set.toList()..sort();
+    return list;
+  }
+
+  List<_EvacCenter> get _filteredCenters {
+    if (_selectedBarangayFilter == null) return _centers;
+    return _centers
+        .where((c) => c.barangay == _selectedBarangayFilter)
+        .toList();
   }
 
   void _flyTo(LatLng location, int index) {
@@ -293,7 +314,7 @@ class _ResponderEvacuationCentersScreenState
                       ),
                     MarkerLayer(
                       markers: [
-                        ..._centers.asMap().entries.map((entry) {
+                        ..._filteredCenters.asMap().entries.map((entry) {
                           final i = entry.key;
                           final center = entry.value;
                           final isSelected = _selectedIndex == i;
@@ -377,6 +398,42 @@ class _ResponderEvacuationCentersScreenState
               ],
             ),
           ),
+          if (!_isLoadingCenters &&
+              _centersError == null &&
+              _centers.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.grey[300]!),
+                ),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<String?>(
+                    value: _selectedBarangayFilter,
+                    isExpanded: true,
+                    hint: const Text(
+                      'All Barangays',
+                      style: TextStyle(fontSize: 13.5),
+                    ),
+                    items: [
+                      const DropdownMenuItem<String?>(
+                        value: null,
+                        child: Text('All Barangays'),
+                      ),
+                      ..._barangaysInCenters.map(
+                        (b) =>
+                            DropdownMenuItem<String?>(value: b, child: Text(b)),
+                      ),
+                    ],
+                    onChanged: (v) =>
+                        setState(() => _selectedBarangayFilter = v),
+                  ),
+                ),
+              ),
+            ),
           Expanded(
             child: _isLoadingCenters
                 ? const Center(child: CircularProgressIndicator())
@@ -404,10 +461,12 @@ class _ResponderEvacuationCentersScreenState
                       ),
                     ),
                   )
-                : _centers.isEmpty
+                : _filteredCenters.isEmpty
                 ? Center(
                     child: Text(
-                      'No evacuation centers available yet.',
+                      _selectedBarangayFilter == null
+                          ? 'No evacuation centers available yet.'
+                          : 'No centers in $_selectedBarangayFilter.',
                       style: TextStyle(color: Colors.grey[500], fontSize: 15),
                     ),
                   )
@@ -417,9 +476,9 @@ class _ResponderEvacuationCentersScreenState
                     color: _gradientTop,
                     child: ListView.builder(
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 90),
-                      itemCount: _centers.length,
+                      itemCount: _filteredCenters.length,
                       itemBuilder: (context, index) {
-                        final center = _centers[index];
+                        final center = _filteredCenters[index];
                         final isSelected = _selectedIndex == index;
                         return GestureDetector(
                           onTap: () => _flyTo(center.location, index),
@@ -543,44 +602,118 @@ class _ResponderEvacuationCentersScreenState
                                       ),
                                       const SizedBox(height: 2),
                                       Text(
-                                        '${_distanceTo(center)} · Cap. ${center.occupancy}/${center.capacity}',
+                                        _distanceTo(center),
                                         style: const TextStyle(
                                           fontSize: 12,
                                           fontWeight: FontWeight.w600,
                                           color: _gradientTop,
                                         ),
                                       ),
-                                      if (widget.isMswd) ...[
-                                        const SizedBox(height: 6),
-                                        GestureDetector(
-                                          onTap: () => Navigator.push(
-                                            context,
-                                            MaterialPageRoute(
-                                              builder: (_) => LogEvacueeScreen(
-                                                centerId: center.id,
-                                                centerName: center.name,
-                                              ),
+                                      const SizedBox(height: 2),
+                                      Row(
+                                        children: [
+                                          Icon(
+                                            Icons.how_to_reg,
+                                            size: 13,
+                                            color: Colors.grey[500],
+                                          ),
+                                          const SizedBox(width: 4),
+                                          Text(
+                                            '${center.evacueesCount} residents logged',
+                                            style: TextStyle(
+                                              fontSize: 11.5,
+                                              color: Colors.grey[600],
                                             ),
                                           ),
-                                          child: Row(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              Icon(
-                                                Icons.how_to_reg,
-                                                size: 13,
-                                                color: _gradientTop,
-                                              ),
-                                              const SizedBox(width: 4),
-                                              Text(
-                                                'Log Evacuee',
-                                                style: TextStyle(
-                                                  fontSize: 11.5,
-                                                  fontWeight: FontWeight.w700,
-                                                  color: _gradientTop,
+                                        ],
+                                      ),
+                                      if (widget.isMswd) ...[
+                                        const SizedBox(height: 8),
+                                        Row(
+                                          children: [
+                                            Expanded(
+                                              child: SizedBox(
+                                                height: 34,
+                                                child: OutlinedButton.icon(
+                                                  onPressed: () =>
+                                                      _changeStatus(center),
+                                                  icon: Icon(
+                                                    Icons.edit_outlined,
+                                                    size: 15,
+                                                    color: _gradientTop,
+                                                  ),
+                                                  label: Text(
+                                                    'Status',
+                                                    style: TextStyle(
+                                                      fontSize: 12.5,
+                                                      fontWeight:
+                                                          FontWeight.w700,
+                                                      color: _gradientTop,
+                                                    ),
+                                                  ),
+                                                  style: OutlinedButton.styleFrom(
+                                                    side: BorderSide(
+                                                      color: _gradientTop,
+                                                    ),
+                                                    padding: EdgeInsets.zero,
+                                                    shape: RoundedRectangleBorder(
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                            8,
+                                                          ),
+                                                    ),
+                                                  ),
                                                 ),
                                               ),
-                                            ],
-                                          ),
+                                            ),
+                                            const SizedBox(width: 8),
+                                            Expanded(
+                                              child: SizedBox(
+                                                height: 34,
+                                                child: ElevatedButton.icon(
+                                                  onPressed: () =>
+                                                      Navigator.push(
+                                                        context,
+                                                        MaterialPageRoute(
+                                                          builder: (_) =>
+                                                              LogEvacueeScreen(
+                                                                centerId:
+                                                                    center.id,
+                                                                centerName:
+                                                                    center.name,
+                                                              ),
+                                                        ),
+                                                      ),
+                                                  icon: const Icon(
+                                                    Icons.how_to_reg,
+                                                    size: 16,
+                                                  ),
+                                                  label: const Text(
+                                                    'Log Evacuee',
+                                                    style: TextStyle(
+                                                      fontSize: 12.5,
+                                                      fontWeight:
+                                                          FontWeight.w700,
+                                                    ),
+                                                  ),
+                                                  style: ElevatedButton.styleFrom(
+                                                    backgroundColor:
+                                                        _gradientTop,
+                                                    foregroundColor:
+                                                        Colors.white,
+                                                    elevation: 0,
+                                                    padding: EdgeInsets.zero,
+                                                    shape: RoundedRectangleBorder(
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                            8,
+                                                          ),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                          ],
                                         ),
                                       ],
                                     ],
@@ -609,6 +742,7 @@ class _EvacCenter {
   final int capacity;
   final int occupancy;
   final String status;
+  final int evacueesCount;
 
   const _EvacCenter({
     required this.id,
@@ -619,6 +753,7 @@ class _EvacCenter {
     required this.capacity,
     required this.occupancy,
     required this.status,
+    this.evacueesCount = 0,
   });
 
   LatLng get location => LatLng(latitude, longitude);
@@ -637,6 +772,12 @@ class _EvacCenter {
           ? json['occupancy']
           : int.tryParse('${json['occupancy']}') ?? 0,
       status: json['status']?.toString() ?? 'open',
+      // withCount('evacuees') on the backend names this evacuees_count —
+      // absent entirely on older cached responses, so default to 0
+      // rather than crash.
+      evacueesCount: json['evacuees_count'] is int
+          ? json['evacuees_count']
+          : int.tryParse('${json['evacuees_count']}') ?? 0,
     );
   }
 }

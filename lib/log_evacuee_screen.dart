@@ -397,6 +397,9 @@ class _LogEvacueeScreenState extends State<LogEvacueeScreen> {
                           TextFormField(
                             controller: _ageController,
                             keyboardType: TextInputType.number,
+                            inputFormatters: [
+                              FilteringTextInputFormatter.digitsOnly,
+                            ],
                             style: const TextStyle(
                               fontSize: 15,
                               color: Color(0xFF1A1A2E),

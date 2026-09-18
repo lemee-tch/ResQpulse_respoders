@@ -6,10 +6,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 
 class ApiService {
   // ── Point this at your Laravel ResQPulse backend ──────────────────
-  // Android emulator:        'http://10.0.2.2:8000/api'
-  // Real device on same WiFi: 'http://192.168.1.X:8000/api'
-  // Live server:              'https://yourdomain.com/api'
-  static const String baseUrl = 'http://resqpulse.com/api';
+  static const String baseUrl = 'https://resqpulse.com/api';
 
   static const Map<String, String> _baseHeaders = {
     'Content-Type': 'application/json',
@@ -364,7 +361,6 @@ class ApiService {
     required String barangay,
     required double latitude,
     required double longitude,
-    required int capacity,
     required String status,
   }) async {
     try {
@@ -378,7 +374,6 @@ class ApiService {
               'barangay': barangay,
               'latitude': latitude,
               'longitude': longitude,
-              'capacity': capacity,
               'status': status,
             }),
           )
@@ -478,6 +473,32 @@ class ApiService {
         return ApiResponse.error(msg.toString());
       }
       return ApiResponse.error(data['message'] ?? 'Could not log evacuee.');
+    } catch (e) {
+      return ApiResponse.error(_handleError(e));
+    }
+  }
+
+  /// All evacuees across every center, newest first — powers the
+  /// Resident Logs quick-access screen. Same MSWD-only gate as
+  /// logEvacuee(); the backend re-checks regardless of what the app
+  /// shows/hides.
+  static Future<ApiResponse> getEvacueeLogs() async {
+    try {
+      final headers = await _responderAuthHeaders();
+      final response = await http
+          .get(
+            Uri.parse('$baseUrl/evacuation-centers/evacuees'),
+            headers: headers,
+          )
+          .timeout(const Duration(seconds: 15));
+
+      if (response.statusCode == 200) {
+        return ApiResponse.success(jsonDecode(response.body));
+      }
+      final data = jsonDecode(response.body);
+      return ApiResponse.error(
+        data['message'] ?? 'Could not load evacuee logs.',
+      );
     } catch (e) {
       return ApiResponse.error(_handleError(e));
     }

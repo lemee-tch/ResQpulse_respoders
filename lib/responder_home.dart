@@ -8,8 +8,10 @@ import 'incident_locations.dart';
 import 'safety_tips.dart';
 import 'route_map.dart';
 import 'navigation_screen.dart';
+import 'incident_resolution.dart';
 import 'add_evacuation.dart';
 import 'evacuation_centers.dart';
+import 'resident_logs_screen.dart';
 
 // Same gradient as the citizen app's home header — kept identical so both
 // apps in the ResQPulse family read as one product.
@@ -279,6 +281,18 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
                                   MaterialPageRoute(
                                     builder: (_) =>
                                         const AddEvacuationCenterScreen(),
+                                  ),
+                                ),
+                              ),
+                              _QuickTile(
+                                label: 'Resident\nLogs',
+                                icon: Icons.how_to_reg_outlined,
+                                iconColor: const Color(0xFF6D28D9),
+                                bgColor: const Color(0xFFEDE9FE),
+                                onTap: () => Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => const ResidentLogsScreen(),
                                   ),
                                 ),
                               ),
@@ -1455,75 +1469,195 @@ class _ReportHistoryScreen extends StatelessWidget {
 }
 
 // ══════════════════════════════════════════════════════════════════
-// Disaster Alerts — same broadcast feed the citizen app reads from
+// Disaster Alerts — same broadcast feed the citizen app reads from.
+// This screen is now a direct port of the citizen app's alert.dart —
+// same tabs (Recent alerts / Alert History), same 7-day recency
+// window, same outlined-circle icon style, same keyword-matching
+// logic. Previously this had its own separate, older implementation
+// (flat list, no tabs, filled-circle icons) that had drifted out of
+// sync with the citizen version.
 // ══════════════════════════════════════════════════════════════════
 
-/// Picks an icon + color that actually matches what the alert is about.
-/// Mirrors the same fix in the citizen app's alert.dart — the Alert
-/// model's `type` column is an audience switch (Citizens/Responders/
-/// Both), not a hazard category, and was never 'Alerts'/'Updates' after
-/// that migration. The old `alert['type'] == 'Alerts'` check here was
-/// checking a value that no longer exists, so every card silently
-/// always rendered as the same generic "info" style.
+/// Picks an icon + color that actually matches what the alert is about,
+/// by keyword-matching the title/subtitle — the Alert model has no
+/// hazard-category field (its `type` column is an audience switch:
+/// Citizens/Responders/Both, not a hazard type), so this is the only
+/// signal available. Falls back to a generic advisory icon rather than
+/// mislabeling every alert as a flood.
 class _AlertStyle {
   final IconData icon;
-  final Color bgColor;
-  final Color iconColor;
-  const _AlertStyle(this.icon, this.bgColor, this.iconColor);
+  final Color color;
+  const _AlertStyle(this.icon, this.color);
 }
 
-const _defaultAlertStyle = _AlertStyle(
-  Icons.campaign_outlined,
-  Color(0xFFE3F2FD),
-  Color(0xFF1565C0),
-);
+const _defaultAlertStyle = _AlertStyle(Icons.campaign, Color(0xFF1A3A8F));
 
 const Map<String, _AlertStyle> _alertKeywordStyles = {
-  'fire': _AlertStyle(
-    Icons.local_fire_department,
-    Color(0xFFFFEBEE),
-    Color(0xFFD32F2F),
-  ),
-  'flood': _AlertStyle(Icons.water, Color(0xFFE3F2FD), Color(0xFF1565C0)),
-  'typhoon': _AlertStyle(Icons.cyclone, Color(0xFFF3E5F5), Color(0xFF6A1B9A)),
-  'storm': _AlertStyle(Icons.cyclone, Color(0xFFF3E5F5), Color(0xFF6A1B9A)),
-  'earthquake': _AlertStyle(
-    Icons.landscape,
-    Color(0xFFEFEBE9),
-    Color(0xFF6D4C41),
-  ),
-  'landslide': _AlertStyle(Icons.terrain, Color(0xFFEFEBE9), Color(0xFF6D4C41)),
+  'fire': _AlertStyle(Icons.local_fire_department, Color(0xFFD32F2F)),
+  'flood': _AlertStyle(Icons.water, Color(0xFF1565C0)),
+  'typhoon': _AlertStyle(Icons.cyclone, Color(0xFF6A1B9A)),
+  'storm': _AlertStyle(Icons.cyclone, Color(0xFF6A1B9A)),
+  'earthquake': _AlertStyle(Icons.landscape, Color(0xFF6D4C41)),
+  'landslide': _AlertStyle(Icons.terrain, Color(0xFF6D4C41)),
   'evacuat': _AlertStyle(
-    // evacuate/evacuation
     Icons.directions_run,
-    Color(0xFFFFF3E0),
     Color(0xFFE65100),
-  ),
-  'health': _AlertStyle(
-    Icons.local_hospital,
-    Color(0xFFE0F2F1),
-    Color(0xFF00897B),
-  ),
-  'power': _AlertStyle(Icons.bolt, Color(0xFFFFFDE7), Color(0xFFF9A825)),
-  'water supply': _AlertStyle(
-    Icons.water_drop,
-    Color(0xFFE3F2FD),
-    Color(0xFF1565C0),
-  ),
-  'road': _AlertStyle(
-    Icons.warning_amber_rounded,
-    Color(0xFFFFF3E0),
-    Color(0xFFE65100),
-  ),
+  ), // evacuate/evacuation
+  'health': _AlertStyle(Icons.local_hospital, Color(0xFF00897B)),
+  'power': _AlertStyle(Icons.bolt, Color(0xFFF9A825)),
+  'water supply': _AlertStyle(Icons.water_drop, Color(0xFF1565C0)),
+  'road': _AlertStyle(Icons.warning_amber_rounded, Color(0xFFE65100)),
 };
 
-_AlertStyle _styleForAlert(Map<String, dynamic> alert) {
-  final text = '${alert['title'] ?? ''} ${alert['subtitle'] ?? ''}'
-      .toLowerCase();
+_AlertStyle _styleForAlert(_AlertData alert) {
+  final text = '${alert.title} ${alert.subtitle ?? ''}'.toLowerCase();
   for (final entry in _alertKeywordStyles.entries) {
     if (text.contains(entry.key)) return entry.value;
   }
   return _defaultAlertStyle;
+}
+
+/// Maps directly to the `alerts` table / Alert model fillable fields —
+/// same shape as the citizen app's _AlertData in alert.dart.
+class _AlertData {
+  final String title;
+  final String? subtitle;
+  final String? body;
+  final String dateTime;
+  final DateTime? createdAt;
+  final String type;
+
+  const _AlertData({
+    required this.title,
+    required this.subtitle,
+    required this.body,
+    required this.dateTime,
+    required this.createdAt,
+    required this.type,
+  });
+
+  factory _AlertData.fromJson(Map<String, dynamic> json) {
+    return _AlertData(
+      title: json['title'] ?? '',
+      subtitle: json['subtitle'],
+      body: json['body'],
+      dateTime: _formatAlertDate(json['created_at']),
+      createdAt: DateTime.tryParse(json['created_at']?.toString() ?? ''),
+      type: json['type'] ?? 'Alerts',
+    );
+  }
+
+  static const _months = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
+
+  static String _formatAlertDate(String? isoString) {
+    if (isoString == null) return '';
+    final date = DateTime.tryParse(isoString);
+    if (date == null) return '';
+
+    final month = _months[date.month - 1];
+    final hour12 = date.hour % 12 == 0 ? 12 : date.hour % 12;
+    final minute = date.minute.toString().padLeft(2, '0');
+    final period = date.hour >= 12 ? 'PM' : 'AM';
+
+    return '$month ${date.day}, ${date.year} - $hour12:$minute $period';
+  }
+}
+
+class _AlertCard extends StatelessWidget {
+  final _AlertData alert;
+  const _AlertCard({required this.alert});
+
+  @override
+  Widget build(BuildContext context) {
+    final style = _styleForAlert(alert);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.grey[200]!, width: 1.2),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(color: style.color, width: 2),
+            ),
+            child: Icon(style.icon, color: style.color, size: 22),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  alert.title,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 15,
+                    color: Color(0xFF1A1A2E),
+                  ),
+                ),
+                if (alert.subtitle != null && alert.subtitle!.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    alert.subtitle!,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.grey[600],
+                    ),
+                  ),
+                ],
+                if (alert.body != null && alert.body!.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    alert.body!,
+                    style: const TextStyle(
+                      fontSize: 13.5,
+                      color: Color(0xFF1A1A2E),
+                      height: 1.35,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 6),
+                Text(
+                  alert.dateTime,
+                  style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _DisasterAlertsScreen extends StatefulWidget {
@@ -1534,33 +1668,57 @@ class _DisasterAlertsScreen extends StatefulWidget {
 }
 
 class _DisasterAlertsScreenState extends State<_DisasterAlertsScreen> {
+  String _selectedTab = 'Recent alerts';
   bool _isLoading = true;
-  String? _error;
-  List<Map<String, dynamic>> _alerts = [];
+  String? _errorMessage;
+
+  final List<String> _tabs = ['Recent alerts', 'Alert History'];
+
+  List<_AlertData> _allAlerts = [];
 
   @override
   void initState() {
     super.initState();
-    _load();
+    _loadAlerts();
   }
 
-  Future<void> _load() async {
+  Future<void> _loadAlerts() async {
     setState(() {
       _isLoading = true;
-      _error = null;
+      _errorMessage = null;
     });
+
     final result = await ApiService.getAlerts();
+
     if (!mounted) return;
-    setState(() {
-      if (result.success && result.data is List) {
-        _alerts = (result.data as List)
-            .map((e) => e as Map<String, dynamic>)
+
+    if (result.success && result.data is List) {
+      setState(() {
+        _allAlerts = (result.data as List)
+            .map((e) => _AlertData.fromJson(e as Map<String, dynamic>))
             .toList();
-      } else {
-        _error = result.error ?? 'Could not load alerts.';
-      }
-      _isLoading = false;
-    });
+        _isLoading = false;
+      });
+    } else {
+      setState(() {
+        _errorMessage = result.error ?? 'Could not load alerts.';
+        _isLoading = false;
+      });
+    }
+  }
+
+  /// Same 3-day window as the admin panel (Admin\AlertController::index())
+  /// — "Recent alerts" is an actual time cutoff, not just "the newest few
+  /// regardless of age"; "Alert History" is the full archive, including
+  /// whatever's in Recent too.
+  List<_AlertData> get _filtered {
+    if (_selectedTab == 'Recent alerts') {
+      final cutoff = DateTime.now().subtract(const Duration(days: 3));
+      return _allAlerts
+          .where((a) => a.createdAt != null && a.createdAt!.isAfter(cutoff))
+          .toList();
+    }
+    return _allAlerts;
   }
 
   @override
@@ -1588,109 +1746,102 @@ class _DisasterAlertsScreenState extends State<_DisasterAlertsScreen> {
         ),
         centerTitle: true,
       ),
-      body: RefreshIndicator(
-        onRefresh: _load,
-        color: _gradientTop,
-        child: _isLoading
-            ? const Center(child: CircularProgressIndicator())
-            : _error != null
-            ? ListView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                children: [
-                  _EmptyStateCard(icon: Icons.error_outline, message: _error!),
-                ],
-              )
-            : _alerts.isEmpty
-            ? ListView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                children: const [
-                  _EmptyStateCard(
-                    icon: Icons.campaign_outlined,
-                    message: 'No broadcasts yet.',
-                  ),
-                ],
-              )
-            : ListView.builder(
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.all(16),
-                itemCount: _alerts.length,
-                itemBuilder: (context, index) {
-                  final alert = _alerts[index];
-                  final style = _styleForAlert(alert);
-                  return Container(
-                    margin: const EdgeInsets.only(bottom: 10),
-                    padding: const EdgeInsets.all(14),
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            color: Colors.white,
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+            child: Row(
+              children: _tabs.map((tab) {
+                final isSelected = _selectedTab == tab;
+                return GestureDetector(
+                  onTap: () => setState(() => _selectedTab = tab),
+                  child: Container(
+                    margin: const EdgeInsets.only(right: 8),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 18,
+                      vertical: 8,
+                    ),
                     decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: Colors.grey[200]!),
+                      color: isSelected
+                          ? const Color(0xFF1A1A2E)
+                          : Colors.transparent,
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: isSelected
+                            ? const Color(0xFF1A1A2E)
+                            : Colors.grey[300]!,
+                        width: 1.5,
+                      ),
                     ),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Container(
-                          width: 38,
-                          height: 38,
-                          decoration: BoxDecoration(
-                            color: style.bgColor,
-                            shape: BoxShape.circle,
-                          ),
-                          child: Icon(
-                            style.icon,
-                            color: style.iconColor,
-                            size: 18,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                alert['title'] ?? '',
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w700,
-                                  fontSize: 13.5,
-                                  color: Color(0xFF1A1A2E),
-                                ),
-                              ),
-                              if (alert['subtitle'] != null) ...[
-                                const SizedBox(height: 2),
-                                Text(
-                                  alert['subtitle'],
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: Colors.grey[600],
-                                  ),
-                                ),
-                              ],
-                              if (alert['body'] != null) ...[
-                                const SizedBox(height: 6),
-                                Text(
-                                  alert['body'],
-                                  style: const TextStyle(
-                                    fontSize: 12.5,
-                                    color: Color(0xFF1A1A2E),
-                                    height: 1.35,
-                                  ),
-                                ),
-                              ],
-                              const SizedBox(height: 6),
-                              Text(
-                                _formatDateTime(alert['created_at']),
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  color: Colors.grey[400],
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
+                    child: Text(
+                      tab,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: isSelected ? Colors.white : Colors.grey[600],
+                      ),
                     ),
-                  );
-                },
-              ),
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+          Expanded(
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : _errorMessage != null
+                ? ListView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: const EdgeInsets.symmetric(horizontal: 32),
+                    children: [
+                      const SizedBox(height: 80),
+                      Text(
+                        _errorMessage!,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.grey[500], fontSize: 14),
+                      ),
+                      const SizedBox(height: 12),
+                      Center(
+                        child: TextButton(
+                          onPressed: _loadAlerts,
+                          child: const Text('Retry'),
+                        ),
+                      ),
+                    ],
+                  )
+                : _filtered.isEmpty
+                ? ListView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: const EdgeInsets.symmetric(horizontal: 32),
+                    children: [
+                      const SizedBox(height: 80),
+                      Text(
+                        _selectedTab == 'Recent alerts'
+                            ? 'No new alerts in the past 3 days — check Alert History for past updates.'
+                            : 'No alert history yet.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.grey[500], fontSize: 15),
+                      ),
+                    ],
+                  )
+                : RefreshIndicator(
+                    onRefresh: _loadAlerts,
+                    color: _gradientTop,
+                    child: ListView.builder(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 20,
+                        vertical: 16,
+                      ),
+                      itemCount: _filtered.length,
+                      itemBuilder: (context, index) {
+                        return _AlertCard(alert: _filtered[index]);
+                      },
+                    ),
+                  ),
+          ),
+        ],
       ),
     );
   }
@@ -2257,78 +2408,161 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
 
                 const SizedBox(height: 30),
 
-                SizedBox(
-                  width: double.infinity,
-                  height: 52,
-                  child: ElevatedButton(
-                    onPressed:
-                        (_missionChoice == null &&
-                            !_iHaveJoined &&
-                            !_isSubmitting)
-                        ? _handleAccept
-                        : null,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF2E9E4F),
-                      disabledBackgroundColor: const Color(
-                        0xFF2E9E4F,
-                      ).withOpacity(0.5),
-                      foregroundColor: Colors.white,
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(30),
-                      ),
-                    ),
-                    child: _isSubmitting
-                        ? const SizedBox(
-                            width: 22,
-                            height: 22,
-                            child: CircularProgressIndicator(
-                              color: Colors.white,
-                              strokeWidth: 2.5,
-                            ),
-                          )
-                        : Text(
-                            _iHaveJoined
-                                ? 'YOU\'RE RESPONDING'
-                                : (_hasResponders
-                                      ? 'JOIN AS BACKUP'
-                                      : 'ACCEPT MISSION'),
-                            style: const TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.bold,
-                              letterSpacing: 0.6,
-                            ),
+                // Once this responder has already joined, "ACCEPT
+                // MISSION" no longer makes sense — but the old version
+                // just showed a permanently-disabled "YOU'RE RESPONDING"
+                // button with nowhere to go, a dead end for anyone
+                // reaching this incident from Accepted Missions. Same
+                // NavigationScreen/IncidentResolutionScreen destinations
+                // the standalone incident_detail.dart already uses.
+                if (_iHaveJoined) ...[
+                  SizedBox(
+                    width: double.infinity,
+                    height: 52,
+                    child: ElevatedButton.icon(
+                      onPressed: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => NavigationScreen(
+                            destinationLat: _lat,
+                            destinationLng: _lng,
+                            destinationLabel:
+                                incident['location']?.toString() ?? 'Incident',
+                            incidentId: incident['id'] is int
+                                ? incident['id'] as int
+                                : int.tryParse('${incident['id']}'),
                           ),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  height: 52,
-                  child: OutlinedButton(
-                    onPressed:
-                        (_missionChoice == null &&
-                            !_iHaveJoined &&
-                            !_isSubmitting)
-                        ? _handleDecline
-                        : null,
-                    style: OutlinedButton.styleFrom(
-                      side: BorderSide(color: Colors.grey[300]!, width: 1.5),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(30),
+                        ),
                       ),
-                    ),
-                    child: Text(
-                      'DECLINE',
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 0.6,
-                        color: Colors.grey[700],
+                      icon: const Icon(Icons.navigation, size: 20),
+                      label: const Text(
+                        'START NAVIGATING',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 0.6,
+                        ),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF0D1B4C),
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(30),
+                        ),
                       ),
                     ),
                   ),
-                ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 52,
+                    child: OutlinedButton.icon(
+                      onPressed: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => IncidentResolutionScreen(
+                            incidentId: incident['id'] is int
+                                ? incident['id'] as int
+                                : int.tryParse('${incident['id']}'),
+                            incidentLabel: incident['emergency_type']
+                                ?.toString(),
+                          ),
+                        ),
+                      ),
+                      icon: const Icon(Icons.check_circle_outline, size: 20),
+                      label: const Text(
+                        'SUBMIT REPORT',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 0.6,
+                        ),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFF2E9E4F),
+                        side: const BorderSide(
+                          color: Color(0xFF2E9E4F),
+                          width: 1.5,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(30),
+                        ),
+                      ),
+                    ),
+                  ),
+                ] else ...[
+                  SizedBox(
+                    width: double.infinity,
+                    height: 52,
+                    child: ElevatedButton(
+                      onPressed:
+                          (_missionChoice == null &&
+                              !_iHaveJoined &&
+                              !_isSubmitting)
+                          ? _handleAccept
+                          : null,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF2E9E4F),
+                        disabledBackgroundColor: const Color(
+                          0xFF2E9E4F,
+                        ).withOpacity(0.5),
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(30),
+                        ),
+                      ),
+                      child: _isSubmitting
+                          ? const SizedBox(
+                              width: 22,
+                              height: 22,
+                              child: CircularProgressIndicator(
+                                color: Colors.white,
+                                strokeWidth: 2.5,
+                              ),
+                            )
+                          : Text(
+                              _hasResponders
+                                  ? 'JOIN AS BACKUP'
+                                  : 'ACCEPT MISSION',
+                              style: const TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 0.6,
+                              ),
+                            ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 52,
+                    child: OutlinedButton(
+                      onPressed:
+                          (_missionChoice == null &&
+                              !_iHaveJoined &&
+                              !_isSubmitting)
+                          ? _handleDecline
+                          : null,
+                      style: OutlinedButton.styleFrom(
+                        side: BorderSide(color: Colors.grey[300]!, width: 1.5),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(30),
+                        ),
+                      ),
+                      child: Text(
+                        'DECLINE',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 0.6,
+                          color: Colors.grey[700],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),

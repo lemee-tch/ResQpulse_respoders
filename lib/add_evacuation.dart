@@ -33,7 +33,6 @@ class AddEvacuationCenterScreen extends StatefulWidget {
 class _AddEvacuationCenterScreenState extends State<AddEvacuationCenterScreen> {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
-  final _capacityController = TextEditingController();
 
   String? _selectedBarangay;
   // No longer user-chosen — every new center starts 'open'. Changing it
@@ -99,7 +98,6 @@ class _AddEvacuationCenterScreenState extends State<AddEvacuationCenterScreen> {
   @override
   void dispose() {
     _nameController.dispose();
-    _capacityController.dispose();
     super.dispose();
   }
 
@@ -184,7 +182,6 @@ class _AddEvacuationCenterScreenState extends State<AddEvacuationCenterScreen> {
       barangay: _selectedBarangay!,
       latitude: _latitude!,
       longitude: _longitude!,
-      capacity: int.parse(_capacityController.text.trim()),
       status: _status,
     );
 
@@ -364,26 +361,6 @@ class _AddEvacuationCenterScreenState extends State<AddEvacuationCenterScreen> {
                     ],
                   ),
                 ],
-                const SizedBox(height: 16),
-
-                _label('Capacity'),
-                const SizedBox(height: 6),
-                TextFormField(
-                  controller: _capacityController,
-                  keyboardType: TextInputType.number,
-                  style: const TextStyle(
-                    fontSize: 15,
-                    color: Color(0xFF1A1A2E),
-                  ),
-                  decoration: _decoration('e.g. 300', Icons.groups_outlined),
-                  validator: (v) {
-                    if (v == null || v.trim().isEmpty)
-                      return 'Capacity is required';
-                    final n = int.tryParse(v.trim());
-                    if (n == null || n < 1) return 'Enter a valid capacity';
-                    return null;
-                  },
-                ),
                 const SizedBox(height: 32),
 
                 SizedBox(
