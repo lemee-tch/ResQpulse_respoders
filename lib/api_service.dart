@@ -1,46 +1,75 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:firebase_messaging/firebase_messaging.dart';
 
+/// ── ResQPulse Responder App — API layer ───────────────────────────
+///
+/// Rebuilt for consistency: every network call in this file goes
+/// through the same three private helpers (`_get`, `_send`,
+/// `_multipart`), so there is exactly one place that knows how to
+/// build headers, apply a timeout, decode JSON, and turn a
+/// non-2xx response into a friendly `ApiResponse.error`. Individual
+/// methods below are now just "what endpoint, what body" — the
+/// plumbing around them no longer needs to be duplicated (and kept
+/// in sync) 20 times over.
+///
+/// Public method signatures are unchanged from the previous version,
+/// so every screen that already calls `ApiService.xxx(...)` keeps
+/// working without edits.
 class ApiService {
-  // ── Point this at your Laravel ResQPulse backend ──────────────────
+  ApiService._();
+
+  // ── Config ──────────────────────────────────────────────────────
   static const String baseUrl = 'https://resqpulse.com/api';
 
-  static const Map<String, String> _baseHeaders = {
+  static const Duration _shortTimeout = Duration(seconds: 10);
+  static const Duration _defaultTimeout = Duration(seconds: 15);
+  static const Duration _uploadTimeout = Duration(seconds: 20);
+
+  static const String _tokenKey = 'responder_auth_token';
+  static const String _responderKey = 'responder';
+
+  static const Map<String, String> _jsonHeaders = {
     'Content-Type': 'application/json',
     'Accept': 'application/json',
   };
 
-  // ── Responder token helpers ────────────────────────────────────────
+  // ── Session storage ────────────────────────────────────────────
 
   static Future<String?> getResponderToken() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getString('responder_auth_token');
+    return prefs.getString(_tokenKey);
   }
 
   static Future<void> saveResponderToken(String token) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('responder_auth_token', token);
+    await prefs.setString(_tokenKey, token);
   }
 
   static Future<void> saveResponder(Map<String, dynamic> responder) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('responder', jsonEncode(responder));
+    await prefs.setString(_responderKey, jsonEncode(responder));
   }
 
   static Future<Map<String, dynamic>?> getResponder() async {
     final prefs = await SharedPreferences.getInstance();
-    final str = prefs.getString('responder');
+    final str = prefs.getString(_responderKey);
     if (str == null) return null;
-    return jsonDecode(str);
+    try {
+      return jsonDecode(str) as Map<String, dynamic>;
+    } catch (_) {
+      return null;
+    }
   }
 
   static Future<void> clearResponderSession() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('responder_auth_token');
-    await prefs.remove('responder');
+    await prefs.remove(_tokenKey);
+    await prefs.remove(_responderKey);
   }
 
   static Future<bool> isResponderLoggedIn() async {
@@ -48,109 +77,234 @@ class ApiService {
     return token != null && token.isNotEmpty;
   }
 
-  static Future<Map<String, String>> _responderAuthHeaders() async {
+  static Future<Map<String, String>> _authHeaders() async {
     final token = await getResponderToken();
     return {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
+      ..._jsonHeaders,
       if (token != null) 'Authorization': 'Bearer $token',
     };
   }
 
-  // ── RESPONDER AUTH ────────────────────────────────────────────────
+  // ── Core request helpers ───────────────────────────────────────
+  //
+  // Every endpoint below funnels through one of these three. They
+  // own: header selection, timeout, JSON decoding, and mapping a
+  // non-2xx response to a friendly ApiResponse.error with whatever
+  // detail the backend sent (message / validation errors / raw body
+  // fallback). Nothing else in this file should call `http.` or
+  // `jsonDecode` directly.
+
+  static Future<ApiResponse> _get(
+    String path, {
+    bool authed = true,
+    Duration timeout = _defaultTimeout,
+  }) async {
+    return _send('GET', path, authed: authed, timeout: timeout);
+  }
+
+  static Future<ApiResponse> _send(
+    String method,
+    String path, {
+    Map<String, dynamic>? body,
+    bool authed = true,
+    Duration timeout = _defaultTimeout,
+    int successStatus = 200,
+  }) async {
+    try {
+      final headers = authed ? await _authHeaders() : _jsonHeaders;
+      final uri = Uri.parse('$baseUrl$path');
+      final encodedBody = body != null ? jsonEncode(body) : null;
+
+      final http.Response response;
+      switch (method) {
+        case 'GET':
+          response = await http.get(uri, headers: headers).timeout(timeout);
+          break;
+        case 'POST':
+          response = await http
+              .post(uri, headers: headers, body: encodedBody)
+              .timeout(timeout);
+          break;
+        case 'PATCH':
+          response = await http
+              .patch(uri, headers: headers, body: encodedBody)
+              .timeout(timeout);
+          break;
+        default:
+          throw UnsupportedError('Unsupported HTTP method: $method');
+      }
+
+      return _handleResponse(response, successStatus: successStatus);
+    } catch (e) {
+      return ApiResponse.error(_describeError(e));
+    }
+  }
+
+  /// Multipart POST — used only by [resolveIncident], where a photo
+  /// (when present) has to ride alongside plain fields.
+  static Future<ApiResponse> _multipart(
+    String path, {
+    required Map<String, String> fields,
+    File? file,
+    String fileField = 'photo',
+    Duration timeout = _uploadTimeout,
+  }) async {
+    try {
+      final uri = Uri.parse('$baseUrl$path');
+      final request = http.MultipartRequest('POST', uri);
+
+      final token = await getResponderToken();
+      request.headers['Accept'] = 'application/json';
+      if (token != null) request.headers['Authorization'] = 'Bearer $token';
+
+      fields.forEach((key, value) {
+        if (value.isNotEmpty) request.fields[key] = value;
+      });
+
+      if (file != null) {
+        request.files.add(
+          await http.MultipartFile.fromPath(fileField, file.path),
+        );
+      }
+
+      final streamed = await request.send().timeout(timeout);
+      final response = await http.Response.fromStream(streamed);
+      return _handleResponse(response);
+    } catch (e) {
+      return ApiResponse.error(_describeError(e));
+    }
+  }
+
+  /// Turns any `http.Response` into an `ApiResponse`, consistently.
+  /// - 2xx (matching [successStatus] when one is given, else any 2xx)
+  ///   → success with the decoded body.
+  /// - Otherwise → error, preferring `message`, falling back to the
+  ///   first `errors` entry (Laravel validation shape), falling back
+  ///   to a truncated raw body so nothing is ever silently swallowed.
+  static ApiResponse _handleResponse(
+    http.Response response, {
+    int? successStatus,
+  }) {
+    dynamic decoded;
+    try {
+      decoded = response.body.isNotEmpty ? jsonDecode(response.body) : null;
+    } catch (_) {
+      decoded = null;
+    }
+
+    final isSuccess = successStatus != null
+        ? response.statusCode == successStatus
+        : response.statusCode >= 200 && response.statusCode < 300;
+
+    if (isSuccess) {
+      return ApiResponse.success(decoded);
+    }
+
+    return ApiResponse.error(
+      _extractErrorMessage(decoded, response),
+      data: decoded,
+      statusCode: response.statusCode,
+    );
+  }
+
+  static String _extractErrorMessage(dynamic decoded, http.Response response) {
+    if (decoded is Map) {
+      if (decoded['message'] is String &&
+          (decoded['message'] as String).isNotEmpty) {
+        return decoded['message'] as String;
+      }
+      final errors = decoded['errors'];
+      if (errors is Map && errors.isNotEmpty) {
+        final firstError = errors.values.first;
+        final msg = firstError is List && firstError.isNotEmpty
+            ? firstError.first
+            : firstError;
+        if (msg != null) return msg.toString();
+      }
+    }
+    final raw = response.body;
+    final truncated = raw.length > 150 ? '${raw.substring(0, 150)}...' : raw;
+    return 'Request failed (${response.statusCode})${truncated.isNotEmpty ? ': $truncated' : '.'}';
+  }
+
+  static String _describeError(dynamic e) {
+    if (e is TimeoutException) {
+      return 'Connection timed out. Please try again.';
+    }
+    final msg = e.toString();
+    if (msg.contains('SocketException') || msg.contains('Connection refused')) {
+      return 'Cannot connect to server. Check your internet connection.';
+    }
+    return 'Something went wrong. Please try again.';
+  }
+
+  // ── RESPONDER AUTH ─────────────────────────────────────────────
   // No self-service registration, email verification, or password
   // reset — responder accounts are one shared login per agency,
-  // pre-created by ResponderSeeder and managed from the admin panel's
-  // "Responder Accounts" page (including password resets). login/me/
-  // logout are the only responder-auth endpoints the backend exposes;
-  // see api.php and Api\ResponderAuthController.
+  // pre-created by ResponderSeeder and managed from the admin
+  // panel's "Responder Accounts" page. login/me/logout are the only
+  // responder-auth endpoints the backend exposes.
 
   static Future<ApiResponse> responderLogin({
     required String email,
     required String password,
   }) async {
-    try {
-      final response = await http
-          .post(
-            Uri.parse('$baseUrl/responder/login'),
-            headers: _baseHeaders,
-            body: jsonEncode({'email': email, 'password': password}),
-          )
-          .timeout(const Duration(seconds: 15));
+    final result = await _send(
+      'POST',
+      '/responder/login',
+      body: {'email': email, 'password': password},
+      authed: false,
+      timeout: _shortTimeout + const Duration(seconds: 5),
+    );
 
-      final data = jsonDecode(response.body);
-
-      if (response.statusCode == 200) {
-        await saveResponderToken(data['token']);
-        await saveResponder(data['responder']);
-        return ApiResponse.success(data);
-      }
-
-      return ApiResponse.error(data['message'] ?? 'Invalid email or password.');
-    } catch (e) {
-      return ApiResponse.error(_handleError(e));
+    if (result.success && result.data is Map) {
+      final data = result.data as Map<String, dynamic>;
+      await saveResponderToken(data['token']);
+      await saveResponder(data['responder']);
     }
+    return result;
   }
 
   static Future<ApiResponse> getResponderMe() async {
-    try {
-      final headers = await _responderAuthHeaders();
-      final response = await http
-          .get(Uri.parse('$baseUrl/responder/me'), headers: headers)
-          .timeout(const Duration(seconds: 10));
+    final result = await _get('/responder/me', timeout: _shortTimeout);
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        await saveResponder(data);
-        return ApiResponse.success(data);
-      } else {
-        await clearResponderSession();
-        return ApiResponse.error('Session expired. Please log in again.');
-      }
-    } catch (e) {
-      return ApiResponse.error(_handleError(e));
+    if (result.success && result.data is Map<String, dynamic>) {
+      await saveResponder(result.data as Map<String, dynamic>);
+    } else if (!result.success) {
+      // Any failure here means the stored token is no longer valid —
+      // clear it so the app falls back to the login screen cleanly.
+      await clearResponderSession();
+      return ApiResponse.error('Session expired. Please log in again.');
     }
+    return result;
   }
 
   static Future<ApiResponse> responderLogout() async {
     try {
-      final headers = await _responderAuthHeaders();
+      final headers = await _authHeaders();
       await http
           .post(Uri.parse('$baseUrl/responder/logout'), headers: headers)
-          .timeout(const Duration(seconds: 10));
-      await clearResponderSession();
-      return ApiResponse.success({});
-    } catch (e) {
-      await clearResponderSession();
-      return ApiResponse.success({});
+          .timeout(_shortTimeout);
+    } catch (_) {
+      // Logout is best-effort — the session is cleared locally either way.
     }
+    await clearResponderSession();
+    return ApiResponse.success({});
   }
 
-  // ── FCM TOKEN ────────────────────────────────────────────────────
-  // Reuses the same /api/fcm-token endpoint the citizen app hits — it's
-  // not citizen-specific, it just updates whichever authenticated model
-  // (Citizen or Responder) owns the Sanctum token making the request.
+  // ── FCM TOKEN ──────────────────────────────────────────────────
+  // Reuses the same /api/fcm-token endpoint the citizen app hits —
+  // it's not citizen-specific, it just updates whichever
+  // authenticated model (Citizen or Responder) owns the Sanctum
+  // token making the request.
 
-  static Future<ApiResponse> updateFcmToken(String fcmToken) async {
-    try {
-      final headers = await _responderAuthHeaders();
-      final response = await http
-          .post(
-            Uri.parse('$baseUrl/fcm-token'),
-            headers: headers,
-            body: jsonEncode({'fcm_token': fcmToken}),
-          )
-          .timeout(const Duration(seconds: 10));
-
-      if (response.statusCode == 200) {
-        return ApiResponse.success(jsonDecode(response.body));
-      }
-      return ApiResponse.error('Failed to register push token.');
-    } catch (e) {
-      // Non-critical — a failed token registration shouldn't disrupt the
-      // responder's session. Silently ignored by the caller.
-      return ApiResponse.error(_handleError(e));
-    }
+  static Future<ApiResponse> updateFcmToken(String fcmToken) {
+    return _send(
+      'POST',
+      '/fcm-token',
+      body: {'fcm_token': fcmToken},
+      timeout: _shortTimeout,
+    );
   }
 
   /// Fetches the device's current FCM token and registers it with the
@@ -169,102 +323,35 @@ class ApiService {
     }
   }
 
-  // ── ASSIGNED INCIDENTS ───────────────────────────────────────────
+  // ── ASSIGNED INCIDENTS ─────────────────────────────────────────
 
-  /// Incidents relevant to this responder's agency — same routing rules
-  /// used server-side to decide who gets pushed a notification.
-  static Future<ApiResponse> getAssignedIncidents() async {
-    try {
-      final headers = await _responderAuthHeaders();
-      final response = await http
-          .get(Uri.parse('$baseUrl/responder/incidents'), headers: headers)
-          .timeout(const Duration(seconds: 15));
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body) as List;
-        return ApiResponse.success(data);
-      }
-
-      // Surface the real status + body instead of a generic message —
-      // makes 401/403/404/500 immediately distinguishable in the UI.
-      String detail = response.body;
-      try {
-        final decoded = jsonDecode(response.body);
-        if (decoded is Map && decoded['message'] != null) {
-          detail = decoded['message'].toString();
-        }
-      } catch (_) {
-        // response.body wasn't JSON (e.g. a raw HTML error page) — just
-        // show it truncated as-is.
-        detail = detail.length > 150
-            ? '${detail.substring(0, 150)}...'
-            : detail;
-      }
-      return ApiResponse.error(
-        'Failed to load incidents (${response.statusCode}): $detail',
-      );
-    } catch (e) {
-      return ApiResponse.error(_handleError(e));
-    }
+  /// Incidents relevant to this responder's agency — same routing
+  /// rules used server-side to decide who gets pushed a notification.
+  static Future<ApiResponse> getAssignedIncidents() {
+    return _get('/responder/incidents');
   }
 
   /// Joins this responder onto the incident — NOT an exclusive claim.
   /// Backup support means any number of responders (same or different
   /// agencies) can accept the same incident; the backend just adds the
   /// caller to the incident_responder pivot if they aren't on it
-  /// already (see IncidentController::accept()). The only real failure
-  /// case is a 409 when the incident has already been marked resolved —
-  /// that response still includes the up-to-date `incident` so the UI
-  /// can refresh its local copy instead of just showing a generic error.
-  static Future<ApiResponse> acceptIncident(int incidentId) async {
-    try {
-      final headers = await _responderAuthHeaders();
-      final response = await http
-          .post(
-            Uri.parse('$baseUrl/responder/incidents/$incidentId/accept'),
-            headers: headers,
-          )
-          .timeout(const Duration(seconds: 15));
-
-      final data = jsonDecode(response.body);
-
-      if (response.statusCode == 200) {
-        return ApiResponse.success(data);
-      }
-
-      // 409 (already claimed) and anything else both carry a message —
-      // and 409 also carries the current `incident` so the caller can
-      // refresh its local copy (e.g. to show who did accept it).
-      return ApiResponse.error(
-        data['message'] ?? 'Could not accept this mission.',
-        data: data,
-      );
-    } catch (e) {
-      return ApiResponse.error(_handleError(e));
-    }
+  /// already. The only real failure case is a 409 when the incident
+  /// has already been marked resolved — that response still includes
+  /// the up-to-date `incident` (in `.data`) so the UI can refresh its
+  /// local copy instead of just showing a generic error.
+  static Future<ApiResponse> acceptIncident(int incidentId) {
+    return _send('POST', '/responder/incidents/$incidentId/accept');
   }
 
   /// Purely informational today — there's no per-responder "declined"
   /// record kept server-side (declining just means "not me", the
-  /// incident stays open for the rest of the agency), so this never
-  /// blocks the caller's local UI update even if the request fails.
-  static Future<ApiResponse> declineIncident(int incidentId) async {
-    try {
-      final headers = await _responderAuthHeaders();
-      final response = await http
-          .post(
-            Uri.parse('$baseUrl/responder/incidents/$incidentId/decline'),
-            headers: headers,
-          )
-          .timeout(const Duration(seconds: 10));
-
-      if (response.statusCode == 200) {
-        return ApiResponse.success(jsonDecode(response.body));
-      }
-      return ApiResponse.error('Failed to decline.');
-    } catch (e) {
-      return ApiResponse.error(_handleError(e));
-    }
+  /// incident stays open for the rest of the agency).
+  static Future<ApiResponse> declineIncident(int incidentId) {
+    return _send(
+      'POST',
+      '/responder/incidents/$incidentId/decline',
+      timeout: _shortTimeout,
+    );
   }
 
   /// Marks an incident resolved from the field — see
@@ -277,83 +364,33 @@ class ApiService {
     int incidentId, {
     String? notes,
     File? photo,
-  }) async {
-    try {
-      final uri = Uri.parse('$baseUrl/responder/incidents/$incidentId/resolve');
-      final request = http.MultipartRequest('POST', uri);
-
-      final token = await getResponderToken();
-      request.headers['Accept'] = 'application/json';
-      if (token != null) request.headers['Authorization'] = 'Bearer $token';
-
-      if (notes != null && notes.isNotEmpty) {
-        request.fields['notes'] = notes;
-      }
-      if (photo != null) {
-        request.files.add(
-          await http.MultipartFile.fromPath('photo', photo.path),
-        );
-      }
-
-      final streamedResponse = await request.send().timeout(
-        const Duration(seconds: 20),
-      );
-      final response = await http.Response.fromStream(streamedResponse);
-      final data = jsonDecode(response.body);
-
-      if (response.statusCode == 200) {
-        return ApiResponse.success(data);
-      }
-      return ApiResponse.error(
-        data['message'] ?? 'Could not mark this incident resolved.',
-        data: data,
-      );
-    } catch (e) {
-      return ApiResponse.error(_handleError(e));
-    }
+  }) {
+    return _multipart(
+      '/responder/incidents/$incidentId/resolve',
+      fields: {if (notes != null) 'notes': notes},
+      file: photo,
+    );
   }
 
-  // ── ALERTS ────────────────────────────────────────────────────────
-  // Same /api/alerts endpoint the citizen app hits — it isn't guard
-  // specific, so it works fine for an authenticated Responder token too.
-  // Used by the "Disaster Alerts" tile on the responder home screen.
-  static Future<ApiResponse> getAlerts() async {
-    try {
-      final headers = await _responderAuthHeaders();
-      final response = await http
-          .get(Uri.parse('$baseUrl/alerts'), headers: headers)
-          .timeout(const Duration(seconds: 15));
-
-      if (response.statusCode == 200) {
-        return ApiResponse.success(jsonDecode(response.body));
-      }
-      return ApiResponse.error('Could not load alerts.');
-    } catch (e) {
-      return ApiResponse.error(_handleError(e));
-    }
+  // ── ALERTS ─────────────────────────────────────────────────────
+  // Same /api/alerts endpoint the citizen app hits — not guard
+  // specific, so it works fine for an authenticated Responder token
+  // too. Used by the "Disaster Alerts" tile on the responder home
+  // screen.
+  static Future<ApiResponse> getAlerts() {
+    return _get('/alerts');
   }
 
-  // ── EVACUATION CENTERS ───────────────────────────────────────────
-  // GET is the same public /api/evacuation-centers endpoint the citizen
-  // app hits (see Api\EvacuationCenterController::index) — not guard
-  // specific, works fine with a responder token or none at all.
+  // ── EVACUATION CENTERS ─────────────────────────────────────────
+  // GET is the same public /api/evacuation-centers endpoint the
+  // citizen app hits — not guard specific, works with a responder
+  // token or none at all.
   //
-  // POST is new: only MSWD responders are allowed to add a center. The
-  // backend re-checks this (403 for anyone else), this is just so the
-  // UI can show a clean error instead of a raw 403 body.
-  static Future<ApiResponse> getEvacuationCenters() async {
-    try {
-      final response = await http
-          .get(Uri.parse('$baseUrl/evacuation-centers'), headers: _baseHeaders)
-          .timeout(const Duration(seconds: 15));
-
-      if (response.statusCode == 200) {
-        return ApiResponse.success(jsonDecode(response.body));
-      }
-      return ApiResponse.error('Could not load evacuation centers.');
-    } catch (e) {
-      return ApiResponse.error(_handleError(e));
-    }
+  // Create/status-update/evacuee-logging are MSWD-only; the backend
+  // re-enforces this (403 for anyone else) regardless of what the
+  // app shows or hides.
+  static Future<ApiResponse> getEvacuationCenters() {
+    return _get('/evacuation-centers', authed: false);
   }
 
   static Future<ApiResponse> createEvacuationCenter({
@@ -362,75 +399,39 @@ class ApiService {
     required double latitude,
     required double longitude,
     required String status,
-  }) async {
-    try {
-      final headers = await _responderAuthHeaders();
-      final response = await http
-          .post(
-            Uri.parse('$baseUrl/evacuation-centers'),
-            headers: headers,
-            body: jsonEncode({
-              'name': name,
-              'barangay': barangay,
-              'latitude': latitude,
-              'longitude': longitude,
-              'status': status,
-            }),
-          )
-          .timeout(const Duration(seconds: 15));
-
-      final data = jsonDecode(response.body);
-
-      if (response.statusCode == 201) {
-        return ApiResponse.success(data);
-      }
-      if (data['errors'] != null) {
-        final errors = data['errors'] as Map<String, dynamic>;
-        final firstError = errors.values.first;
-        final msg = firstError is List ? firstError.first : firstError;
-        return ApiResponse.error(msg.toString());
-      }
-      return ApiResponse.error(
-        data['message'] ?? 'Failed to add evacuation center.',
-      );
-    } catch (e) {
-      return ApiResponse.error(_handleError(e));
-    }
+  }) {
+    return _send(
+      'POST',
+      '/evacuation-centers',
+      body: {
+        'name': name,
+        'barangay': barangay,
+        'latitude': latitude,
+        'longitude': longitude,
+        'status': status,
+      },
+      successStatus: 201,
+    );
   }
 
-  /// The "action" for changing an existing center's status — MSWD-only,
-  /// same as create. Separate from creation (which always starts a
-  /// center at 'open') so an MSWD responder marks it full/closed later
-  /// from the centers list instead of picking a status up front.
+  /// Changes an existing center's status — MSWD-only, same as create.
+  /// Kept separate from creation (which always starts a center at
+  /// 'open') so an MSWD responder marks it full/closed later from the
+  /// centers list instead of picking a status up front.
   static Future<ApiResponse> updateEvacuationCenterStatus(
     int centerId,
     String status,
-  ) async {
-    try {
-      final headers = await _responderAuthHeaders();
-      final response = await http
-          .patch(
-            Uri.parse('$baseUrl/evacuation-centers/$centerId/status'),
-            headers: headers,
-            body: jsonEncode({'status': status}),
-          )
-          .timeout(const Duration(seconds: 15));
-
-      final data = jsonDecode(response.body);
-
-      if (response.statusCode == 200) {
-        return ApiResponse.success(data);
-      }
-      return ApiResponse.error(data['message'] ?? 'Could not update status.');
-    } catch (e) {
-      return ApiResponse.error(_handleError(e));
-    }
+  ) {
+    return _send(
+      'PATCH',
+      '/evacuation-centers/$centerId/status',
+      body: {'status': status},
+    );
   }
 
-  /// MSWD-only, same gate as createEvacuationCenter/updateEvacuationCenterStatus
-  /// above — logs one evacuee (one row per person, not per household) at
-  /// a specific center. Arrival only; there's no matching "check out"
-  /// call, by design (see the backend's Evacuee model doc comment).
+  /// MSWD-only, same gate as above — logs one evacuee (one row per
+  /// person, not per household) at a specific center. Arrival only;
+  /// there's no matching "check out" call, by design.
   static Future<ApiResponse> logEvacuee({
     required int centerId,
     required String firstName,
@@ -441,95 +442,60 @@ class ApiService {
     required String barangay,
     required String gender,
     required int age,
-  }) async {
-    try {
-      final headers = await _responderAuthHeaders();
-      final response = await http
-          .post(
-            Uri.parse('$baseUrl/evacuation-centers/$centerId/evacuees'),
-            headers: headers,
-            body: jsonEncode({
-              'first_name': firstName,
-              'middle_name': middleName,
-              'last_name': lastName,
-              'suffix': suffix,
-              'contact_number': contactNumber,
-              'barangay': barangay,
-              'gender': gender,
-              'age': age,
-            }),
-          )
-          .timeout(const Duration(seconds: 15));
-
-      final data = jsonDecode(response.body);
-
-      if (response.statusCode == 201) {
-        return ApiResponse.success(data);
-      }
-      if (data['errors'] != null) {
-        final errors = data['errors'] as Map<String, dynamic>;
-        final firstError = errors.values.first;
-        final msg = firstError is List ? firstError.first : firstError;
-        return ApiResponse.error(msg.toString());
-      }
-      return ApiResponse.error(data['message'] ?? 'Could not log evacuee.');
-    } catch (e) {
-      return ApiResponse.error(_handleError(e));
-    }
+  }) {
+    return _send(
+      'POST',
+      '/evacuation-centers/$centerId/evacuees',
+      body: {
+        'first_name': firstName,
+        'middle_name': middleName,
+        'last_name': lastName,
+        'suffix': suffix,
+        'contact_number': contactNumber,
+        'barangay': barangay,
+        'gender': gender,
+        'age': age,
+      },
+      successStatus: 201,
+    );
   }
 
   /// All evacuees across every center, newest first — powers the
-  /// Resident Logs quick-access screen. Same MSWD-only gate as
-  /// logEvacuee(); the backend re-checks regardless of what the app
-  /// shows/hides.
-  static Future<ApiResponse> getEvacueeLogs() async {
-    try {
-      final headers = await _responderAuthHeaders();
-      final response = await http
-          .get(
-            Uri.parse('$baseUrl/evacuation-centers/evacuees'),
-            headers: headers,
-          )
-          .timeout(const Duration(seconds: 15));
-
-      if (response.statusCode == 200) {
-        return ApiResponse.success(jsonDecode(response.body));
-      }
-      final data = jsonDecode(response.body);
-      return ApiResponse.error(
-        data['message'] ?? 'Could not load evacuee logs.',
-      );
-    } catch (e) {
-      return ApiResponse.error(_handleError(e));
-    }
-  }
-
-  // ── Error handler ─────────────────────────────────────────────────
-
-  static String _handleError(dynamic e) {
-    final msg = e.toString();
-    if (msg.contains('SocketException') || msg.contains('Connection refused')) {
-      return 'Cannot connect to server. Check your internet or server URL.';
-    }
-    if (msg.contains('TimeoutException')) {
-      return 'Connection timed out. Please try again.';
-    }
-    return 'Something went wrong. Please try again.';
+  /// Resident Logs screen. Same MSWD-only gate as logEvacuee(); the
+  /// backend re-checks regardless of what the app shows/hides.
+  static Future<ApiResponse> getEvacueeLogs() {
+    return _get('/evacuation-centers/evacuees');
   }
 }
 
-// ── API Response wrapper ────────────────────────────────────────────
-
+// ── API Response wrapper ──────────────────────────────────────────
+//
+// Unchanged shape from the previous version (`.success`, `.data`,
+// `.error`) so every existing call site keeps compiling. `statusCode`
+// is new and optional — screens that want to special-case a 409 (an
+// incident someone else already resolved/claimed) can now check it
+// directly instead of string-matching the error message.
 class ApiResponse {
   final bool success;
   final dynamic data;
   final String? error;
+  final int? statusCode;
 
-  ApiResponse._({required this.success, this.data, this.error});
+  ApiResponse._({
+    required this.success,
+    this.data,
+    this.error,
+    this.statusCode,
+  });
 
   factory ApiResponse.success(dynamic data) =>
-      ApiResponse._(success: true, data: data);
+      ApiResponse._(success: true, data: data, statusCode: 200);
 
-  factory ApiResponse.error(String message, {dynamic data}) =>
-      ApiResponse._(success: false, error: message, data: data);
+  factory ApiResponse.error(String message, {dynamic data, int? statusCode}) =>
+      ApiResponse._(
+        success: false,
+        error: message,
+        data: data,
+        statusCode: statusCode,
+      );
 }
