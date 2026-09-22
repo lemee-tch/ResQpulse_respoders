@@ -331,6 +331,13 @@ class ApiService {
     return _get('/responder/incidents');
   }
 
+  /// Resolved incidents this responder personally responded to —
+  /// powers the Report History screen. Separate from
+  /// getAssignedIncidents() (which only ever returns open incidents).
+  static Future<ApiResponse> getIncidentHistory() {
+    return _get('/responder/incidents/history');
+  }
+
   /// Joins this responder onto the incident — NOT an exclusive claim.
   /// Backup support means any number of responders (same or different
   /// agencies) can accept the same incident; the backend just adds the
