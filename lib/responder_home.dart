@@ -1415,66 +1415,65 @@ class _IncidentRowCard extends StatelessWidget {
 }
 
 // ══════════════════════════════════════════════════════════════════
-// Report History (Resolved) — the responder feed endpoint only ever
-// returns open incidents (see IncidentController::assignedToResponder),
-// so this screen is ready to display resolved reports the moment a
-// history endpoint exists; for now it explains that clearly instead of
-// silently showing nothing.
+// Report History (Resolved) — resolved incidents THIS responder
+// personally accepted (or backed up on). Backed by its own endpoint
+// (GET /responder/incidents/history, IncidentController::
+// resolvedForResponder) rather than filtering the home screen's
+// _incidents list, because that list only ever holds OPEN incidents —
+// assignedToResponder() excludes resolved ones by design, so a resolved
+// report disappears from it the moment it's closed out. This screen
+// fetches its own data on open (and pull-to-refresh) instead of relying
+// on anything the home screen already loaded.
 // ══════════════════════════════════════════════════════════════════
 
-class _ReportHistoryScreen extends StatelessWidget {
+class _ReportHistoryScreen extends StatefulWidget {
   const _ReportHistoryScreen();
 
   @override
+  State<_ReportHistoryScreen> createState() => _ReportHistoryScreenState();
+}
+
+class _ReportHistoryScreenState extends State<_ReportHistoryScreen> {
+  List<dynamic> _incidents = [];
+  bool _isLoading = true;
+  String? _errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+    final result = await ApiService.getResolvedIncidents();
+    if (!mounted) return;
+    setState(() {
+      if (result.success) {
+        _incidents = result.data as List<dynamic>;
+      } else {
+        _errorMessage = result.error;
+      }
+      _isLoading = false;
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFF5F6FA),
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(
-            Icons.arrow_back_ios_new,
-            color: Color(0xFF1A1A2E),
-            size: 20,
-          ),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: const Text(
-          'Report History',
-          style: TextStyle(
-            color: Color(0xFF1A1A2E),
-            fontWeight: FontWeight.bold,
-            fontSize: 18,
-          ),
-        ),
-        centerTitle: true,
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          children: [
-            const SizedBox(height: 40),
-            Icon(Icons.fact_check_outlined, size: 44, color: Colors.grey[300]),
-            const SizedBox(height: 14),
-            Text(
-              'No resolved reports yet',
-              style: TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.w700,
-                color: Colors.grey[700],
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Incidents your agency has resolved will be logged here so you '
-              'can review past responses.',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 12.5, color: Colors.grey[500]),
-            ),
-          ],
-        ),
-      ),
+    return _IncidentListScreen(
+      title: 'Report History',
+      subtitle: 'Resolved incidents you personally responded to.',
+      incidents: _incidents,
+      isLoading: _isLoading,
+      errorMessage: _errorMessage,
+      onRetry: _load,
+      emptyIcon: Icons.fact_check_outlined,
+      emptyMessage:
+          'No resolved reports yet. Incidents you\'ve responded to and '
+          'resolved will be logged here.',
     );
   }
 }
