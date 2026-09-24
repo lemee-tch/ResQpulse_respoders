@@ -80,6 +80,16 @@ class _IncidentDetailScreenState extends State<IncidentDetailScreen> {
   IconData get _icon =>
       _typeIcons[_incident['emergency_type']] ?? Icons.warning_amber_rounded;
 
+  /// "SOS Alert — Accident", etc. once the citizen picked a hazard type
+  /// on the SOS screen — see Incident::getDisplayTypeAttribute() on the
+  /// backend. Falls back to the raw emergency_type for older rows/API
+  /// responses that don't carry display_type. Only used for the label
+  /// shown — [_icon] above stays keyed on the raw emergency_type.
+  String get _displayType =>
+      _incident['display_type']?.toString() ??
+      _incident['emergency_type']?.toString() ??
+      'Unknown';
+
   double? get _lat => double.tryParse('${_incident['latitude']}');
   double? get _lng => double.tryParse('${_incident['longitude']}');
 
@@ -240,7 +250,7 @@ class _IncidentDetailScreenState extends State<IncidentDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final type = _incident['emergency_type']?.toString() ?? 'Unknown';
+    final type = _displayType;
     final location = _incident['location']?.toString() ?? '—';
     final description = _incident['description']?.toString() ?? '';
 

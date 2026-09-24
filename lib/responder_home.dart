@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'api_service.dart';
 import 'responder_login.dart';
 import 'profile.dart';
@@ -1035,8 +1034,14 @@ class _CriticalAlertCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // display_type ("SOS Alert — Accident", etc. — see Incident model's
+    // getDisplayTypeAttribute()) is preferred over the raw emergency_type
+    // so an SOS with a citizen-picked hazard type reads the same way here
+    // as it does in the admin panel; an AI-detected type still wins when
+    // present, since that's the model's own read on the photo.
     final String type =
         incident['ai_detected_type'] ??
+        incident['display_type'] ??
         incident['emergency_type'] ??
         'Emergency';
     final String location = incident['location'] ?? 'Unknown location';
@@ -1251,6 +1256,11 @@ class _IncidentRowCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final String type = incident['emergency_type'] ?? 'Unknown';
+    // "SOS Alert — Accident", etc. once the citizen picked a hazard type
+    // on the SOS screen — see Incident::getDisplayTypeAttribute(). Only
+    // used for the label shown; icon lookup and the SOS border/styling
+    // below stay keyed on the raw `type` so they're unaffected.
+    final String displayType = incident['display_type']?.toString() ?? type;
     final String? aiType = incident['ai_detected_type'];
     final String location = incident['location'] ?? '';
     final String status = (incident['status'] ?? 'pending').toString();
@@ -1314,7 +1324,7 @@ class _IncidentRowCard extends StatelessWidget {
                     children: [
                       Expanded(
                         child: Text(
-                          isSos ? 'SOS Emergency' : type,
+                          displayType,
                           style: const TextStyle(
                             fontWeight: FontWeight.bold,
                             fontSize: 13.5,
@@ -1365,23 +1375,17 @@ class _IncidentRowCard extends StatelessWidget {
                     const SizedBox(height: 4),
                     Row(
                       children: [
-                        Icon(
-                          status == 'resolved'
-                              ? Icons.check_circle
-                              : Icons.shield,
+                        const Icon(
+                          Icons.shield,
                           size: 12,
-                          color: const Color(0xFF2E7D32),
+                          color: Color(0xFF2E7D32),
                         ),
                         const SizedBox(width: 4),
                         Expanded(
                           child: Text(
-                            status == 'resolved'
-                                ? (responders.length == 1
-                                      ? 'Resolved by: ${responders.first['full_name'] ?? 'Responder'}'
-                                      : 'Resolved by: ${responders.first['full_name'] ?? 'Responder'} +${responders.length - 1} more')
-                                : (responders.length == 1
-                                      ? 'Responding: ${responders.first['full_name'] ?? 'Assigned'}'
-                                      : 'Responding: ${responders.first['full_name'] ?? 'Assigned'} +${responders.length - 1} more'),
+                            responders.length == 1
+                                ? 'Responding: ${responders.first['full_name'] ?? 'Assigned'}'
+                                : 'Responding: ${responders.first['full_name'] ?? 'Assigned'} +${responders.length - 1} more',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
@@ -1411,48 +1415,15 @@ class _IncidentRowCard extends StatelessWidget {
 }
 
 // ══════════════════════════════════════════════════════════════════
-// Report History (Resolved) — backed by
-// Api\IncidentController::history(), which returns every resolved
-// incident this responder personally accepted/backed up on (not just
-// this responder's agency), newest-resolved first. Each row already
-// shows who resolved it via _IncidentRowCard's "Resolved by: ..." line
-// (same `responders` relation the accept/resolve flow populates).
+// Report History (Resolved) — the responder feed endpoint only ever
+// returns open incidents (see IncidentController::assignedToResponder),
+// so this screen is ready to display resolved reports the moment a
+// history endpoint exists; for now it explains that clearly instead of
+// silently showing nothing.
 // ══════════════════════════════════════════════════════════════════
 
-class _ReportHistoryScreen extends StatefulWidget {
+class _ReportHistoryScreen extends StatelessWidget {
   const _ReportHistoryScreen();
-
-  @override
-  State<_ReportHistoryScreen> createState() => _ReportHistoryScreenState();
-}
-
-class _ReportHistoryScreenState extends State<_ReportHistoryScreen> {
-  List<dynamic> _history = [];
-  bool _isLoading = true;
-  String? _errorMessage;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-    });
-    final result = await ApiService.getIncidentHistory();
-    if (!mounted) return;
-    setState(() {
-      if (result.success && result.data is List) {
-        _history = result.data as List<dynamic>;
-      } else {
-        _errorMessage = result.error ?? 'Could not load report history.';
-      }
-      _isLoading = false;
-    });
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -1479,52 +1450,28 @@ class _ReportHistoryScreenState extends State<_ReportHistoryScreen> {
         ),
         centerTitle: true,
       ),
-      body: RefreshIndicator(
-        onRefresh: _load,
-        color: _gradientTop,
-        child: ListView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+      body: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
           children: [
-            Text(
-              'Incidents you\'ve responded to that are now resolved.',
-              style: TextStyle(fontSize: 12.5, color: Colors.grey[600]),
-            ),
+            const SizedBox(height: 40),
+            Icon(Icons.fact_check_outlined, size: 44, color: Colors.grey[300]),
             const SizedBox(height: 14),
-            if (_isLoading)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 40),
-                child: Center(child: CircularProgressIndicator()),
-              )
-            else if (_errorMessage != null)
-              _EmptyStateCard(
-                icon: Icons.error_outline,
-                message: _errorMessage!,
-              )
-            else if (_history.isEmpty)
-              const _EmptyStateCard(
-                icon: Icons.fact_check_outlined,
-                message:
-                    'No resolved reports yet. Incidents you\'ve resolved '
-                    'will be logged here.',
-              )
-            else
-              ..._history.map(
-                (incident) => Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: _IncidentRowCard(
-                    incident: Map<String, dynamic>.from(incident as Map),
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => _IncidentDetailScreen(
-                          incident: Map<String, dynamic>.from(incident),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
+            Text(
+              'No resolved reports yet',
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+                color: Colors.grey[700],
               ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Incidents your agency has resolved will be logged here so you '
+              'can review past responses.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 12.5, color: Colors.grey[500]),
+            ),
           ],
         ),
       ),
@@ -1921,12 +1868,6 @@ class _DisasterAlertsScreenState extends State<_DisasterAlertsScreen> {
 // turn-by-turn NavigationScreen, passing the incident's id through so
 // NavigationScreen's "Mark as Resolved" button can open
 // IncidentResolutionScreen already knowing which incident it's for.
-//
-// When `incident['status'] == 'resolved'` (opened from Report History,
-// or an incident that got resolved by someone else while this screen
-// was already open), the Accept/Decline/Navigate actions are replaced
-// with a read-only resolution summary (_ResolutionSummary below) —
-// there is nothing left to action on a closed incident.
 // ══════════════════════════════════════════════════════════════════
 
 class _IncidentDetailScreen extends StatefulWidget {
@@ -1973,21 +1914,6 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
     setState(() => _myResponderId = me['id']?.toString());
   }
 
-  /// Opens the phone dialer with the reporter's number pre-filled — the
-  /// responder taps to actually place the call, nothing is dialed
-  /// automatically. Calling the reporter directly used to be an admin
-  /// action from the web dashboard; that's moved here, to whoever is
-  /// actually responding.
-  Future<void> _callReporter(String mobile) async {
-    final uri = Uri(scheme: 'tel', path: mobile);
-    final launched = await launchUrl(uri);
-    if (!launched && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not open the phone dialer.')),
-      );
-    }
-  }
-
   List<Map<String, dynamic>> get _responders {
     final raw = incident['responders'];
     if (raw is! List) return [];
@@ -1995,8 +1921,6 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
   }
 
   bool get _hasResponders => _responders.isNotEmpty;
-
-  bool get _isResolved => incident['status'] == 'resolved';
 
   /// Whether the responder currently looking at this screen is already
   /// on the incident — this, not [_hasResponders], is what should
@@ -2179,7 +2103,8 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
   }
 
   void _handleShare() {
-    final type = incident['emergency_type'] ?? 'Incident';
+    final type =
+        incident['display_type'] ?? incident['emergency_type'] ?? 'Incident';
     final location = incident['location'] ?? 'Unknown location';
     final time = _formatDateTime(incident['created_at']);
     Clipboard.setData(ClipboardData(text: '$type — $location ($time)'));
@@ -2190,7 +2115,10 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final String type = incident['emergency_type'] ?? 'Unknown';
+    final String rawType = incident['emergency_type'] ?? 'Unknown';
+    // Title text uses display_type ("SOS Alert — Accident") when
+    // available; the icon lookup just below stays keyed on rawType.
+    final String type = incident['display_type']?.toString() ?? rawType;
     final String location = incident['location'] ?? '—';
     final String? priority = incident['priority'];
 
@@ -2288,7 +2216,7 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
                         shape: BoxShape.circle,
                       ),
                       child: Icon(
-                        _incidentIcon(type),
+                        _incidentIcon(rawType),
                         color: Colors.white,
                         size: 20,
                       ),
@@ -2304,26 +2232,7 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
                         ),
                       ),
                     ),
-                    if (_isResolved)
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 5,
-                        ),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFE8F5E9),
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: const Text(
-                          'Resolved',
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.bold,
-                            color: Color(0xFF2E7D32),
-                          ),
-                        ),
-                      )
-                    else if (_hasResponders)
+                    if (_hasResponders)
                       Container(
                         padding: const EdgeInsets.symmetric(
                           horizontal: 10,
@@ -2368,9 +2277,9 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
 
                 const SizedBox(height: 22),
                 if (_hasResponders) ...[
-                  Text(
-                    _isResolved ? 'Responded By' : 'Responding Team',
-                    style: const TextStyle(
+                  const Text(
+                    'Responding Team',
+                    style: TextStyle(
                       fontSize: 12.5,
                       color: Colors.grey,
                       fontWeight: FontWeight.w500,
@@ -2431,30 +2340,6 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
                   icon: Icons.phone_outlined,
                   label: 'Contact',
                   value: reporterContact,
-                  // Admin no longer calls the reporter from the SOS page —
-                  // that's now on the responder actually heading there.
-                  // Guarded against the 'Not available' placeholder and a
-                  // blank number, same as the empty-value case elsewhere
-                  // on this screen.
-                  trailing:
-                      reporterContact.trim().isNotEmpty &&
-                          reporterContact != 'Not available'
-                      ? GestureDetector(
-                          onTap: () => _callReporter(reporterContact),
-                          child: Container(
-                            padding: const EdgeInsets.all(10),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF10B981).withOpacity(.12),
-                              shape: BoxShape.circle,
-                            ),
-                            child: const Icon(
-                              Icons.call_rounded,
-                              color: Color(0xFF10B981),
-                              size: 20,
-                            ),
-                          ),
-                        )
-                      : null,
                 ),
 
                 if ((incident['description'] ?? '').toString().isNotEmpty) ...[
@@ -2525,13 +2410,7 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
                   ),
                 ],
 
-                // AI Photo Analysis is shown for SOS alerts only — for a
-                // manually-filed incident report, the AI's read on the
-                // photo still runs server-side (it's what sets the
-                // incident's priority), it's just not surfaced as its
-                // own info row here anymore.
-                if (incident['ai_detected_type'] != null &&
-                    incident['emergency_type'] == 'SOS Emergency') ...[
+                if (incident['ai_detected_type'] != null) ...[
                   const SizedBox(height: 18),
                   _InfoRow(
                     icon: Icons.auto_awesome,
@@ -2543,11 +2422,6 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
 
                 const SizedBox(height: 30),
 
-                // A resolved incident has nothing left to action —
-                // Accept/Decline/Navigate all stop making sense once
-                // it's closed out. Show what was submitted instead.
-                if (_isResolved)
-                  _ResolutionSummary(incident: incident)
                 // Once this responder has already joined, "ACCEPT
                 // MISSION" no longer makes sense — but the old version
                 // just showed a permanently-disabled "YOU'RE RESPONDING"
@@ -2555,7 +2429,7 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
                 // reaching this incident from Accepted Missions. Same
                 // NavigationScreen/IncidentResolutionScreen destinations
                 // the standalone incident_detail.dart already uses.
-                else if (_iHaveJoined) ...[
+                if (_iHaveJoined) ...[
                   SizedBox(
                     width: double.infinity,
                     height: 52,
@@ -2712,99 +2586,14 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
   }
 }
 
-/// Read-only summary of what the responder submitted when they marked
-/// this incident resolved (see IncidentResolutionScreen /
-/// Api\IncidentController::resolve()) — notes and an optional photo.
-/// Shown in place of the Accept/Decline/Navigate actions once an
-/// incident is closed out.
-class _ResolutionSummary extends StatelessWidget {
-  final Map<String, dynamic> incident;
-  const _ResolutionSummary({required this.incident});
-
-  @override
-  Widget build(BuildContext context) {
-    final String? notes = (incident['resolution_notes'] as String?)?.trim();
-    final String? photoPath = incident['resolution_photo_path'] as String?;
-    final bool hasNotes = notes != null && notes.isNotEmpty;
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFFECFDF5),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFA7F3D0), width: 1.2),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Row(
-            children: [
-              Icon(Icons.check_circle, color: Color(0xFF10B981), size: 20),
-              SizedBox(width: 8),
-              Text(
-                'Resolution Notes',
-                style: TextStyle(
-                  fontSize: 14.5,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF065F46),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Text(
-            hasNotes ? notes : 'No notes were submitted with this resolution.',
-            style: TextStyle(
-              fontSize: 13.5,
-              height: 1.5,
-              color: hasNotes ? const Color(0xFF065F46) : Colors.grey[500],
-              fontStyle: hasNotes ? FontStyle.normal : FontStyle.italic,
-            ),
-          ),
-          if (photoPath != null && photoPath.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            GestureDetector(
-              onTap: () => _openPhotoViewer(context, [photoPath], 0),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(10),
-                child: Image.network(
-                  _photoUrl(photoPath),
-                  width: 100,
-                  height: 100,
-                  fit: BoxFit.cover,
-                  errorBuilder: (context, error, stack) => Container(
-                    width: 100,
-                    height: 100,
-                    color: const Color(0xFFF0F0F0),
-                    child: Icon(
-                      Icons.broken_image_outlined,
-                      color: Colors.grey[400],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
 class _InfoRow extends StatelessWidget {
   final IconData icon;
   final String label;
   final String value;
-  // Optional trailing affordance — used by the "Contact" row to add a
-  // tappable Call button without turning every other _InfoRow into
-  // something it isn't.
-  final Widget? trailing;
   const _InfoRow({
     required this.icon,
     required this.label,
     required this.value,
-    this.trailing,
   });
 
   @override
@@ -2839,7 +2628,6 @@ class _InfoRow extends StatelessWidget {
             ],
           ),
         ),
-        if (trailing != null) trailing!,
       ],
     );
   }
