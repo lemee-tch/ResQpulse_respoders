@@ -18,14 +18,26 @@ const Color _green = Color(0xFF2E9E3F);
 /// (the entry point on the centers list is already gated the same way
 /// add_evacuation.dart's is). The backend double-checks this too — a
 /// non-MSWD token gets a 403 from the endpoint regardless.
+///
+/// [centerStatus] is passed in from the centers list so this screen knows
+/// right away whether the center can still take evacuees — the list
+/// already hides/disables the "Log Evacuee" button once a center is
+/// full/closed, but status can change in the moment between loading that
+/// list and a responder tapping through, so this screen re-checks it too
+/// and shows a blocking message instead of the form when it's not 'open'.
+/// The backend is the actual authority either way (see
+/// Api\EvacuationCenterController::storeEvacuee) — this is just so a
+/// responder finds out immediately instead of after filling out the form.
 class LogEvacueeScreen extends StatefulWidget {
   final int centerId;
   final String centerName;
+  final String centerStatus;
 
   const LogEvacueeScreen({
     super.key,
     required this.centerId,
     required this.centerName,
+    required this.centerStatus,
   });
 
   @override
@@ -46,6 +58,8 @@ class _LogEvacueeScreenState extends State<LogEvacueeScreen> {
 
   bool _isSaving = false;
   String? _errorMessage;
+
+  bool get _isOpen => widget.centerStatus == 'open';
 
   // Same barangay list used across the app (register.dart,
   // report_incident.dart, add_evacuation.dart, evacuation.blade.php) so
@@ -102,6 +116,11 @@ class _LogEvacueeScreenState extends State<LogEvacueeScreen> {
   }
 
   Future<void> _handleSave() async {
+    // Shouldn't be reachable — the form below isn't shown at all when the
+    // center isn't open — but guard anyway, same belt-and-suspenders
+    // pattern as the MSWD-only checks elsewhere in this app.
+    if (!_isOpen) return;
+
     if (!_formKey.currentState!.validate()) return;
     if (_selectedGender == null) {
       setState(() => _errorMessage = 'Please select a gender.');
@@ -189,306 +208,366 @@ class _LogEvacueeScreenState extends State<LogEvacueeScreen> {
           ),
         ),
       ),
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-          child: Form(
-            key: _formKey,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: _green.withOpacity(0.08),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: _green.withOpacity(0.4)),
+      body: SafeArea(child: !_isOpen ? _buildBlockedState() : _buildForm()),
+    );
+  }
+
+  /// Shown instead of the form when the center is full or closed —
+  /// there's nothing to fill out if logging isn't possible here, so this
+  /// explains why and sends the responder back to pick another center
+  /// (or update this one's status first) rather than leaving them staring
+  /// at a form that will just fail on submit.
+  Widget _buildBlockedState() {
+    final isClosed = widget.centerStatus == 'closed';
+
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 72,
+              height: 72,
+              decoration: BoxDecoration(
+                color: Colors.red[50],
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                isClosed ? Icons.lock_outline : Icons.people_outline,
+                color: Colors.red[400],
+                size: 34,
+              ),
+            ),
+            const SizedBox(height: 20),
+            Text(
+              isClosed
+                  ? '${widget.centerName} is closed'
+                  : '${widget.centerName} is full',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFF1A1A2E),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              isClosed
+                  ? 'New evacuees can\'t be logged here while this center is marked closed. Pick a different center, or update its status first if it should be open.'
+                  : 'New evacuees can\'t be logged here while this center is marked full. Pick a different center, or update its status once space frees up.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 13.5,
+                color: Colors.grey[600],
+                height: 1.4,
+              ),
+            ),
+            const SizedBox(height: 28),
+            SizedBox(
+              width: double.infinity,
+              height: 50,
+              child: OutlinedButton(
+                onPressed: () => Navigator.pop(context),
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: _navy),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(28),
                   ),
-                  child: Row(
+                ),
+                child: const Text(
+                  'Back to Centers',
+                  style: TextStyle(fontWeight: FontWeight.bold, color: _navy),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildForm() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+      child: Form(
+        key: _formKey,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: _green.withOpacity(0.08),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: _green.withOpacity(0.4)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.info_outline, color: _green, size: 18),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Logging at ${widget.centerName}. One entry per person — arrival only, no check-out needed.',
+                      style: const TextStyle(
+                        fontSize: 12.5,
+                        color: Color(0xFF1B5E20),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 18),
+
+            if (_errorMessage != null) ...[
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: Colors.red[50],
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.red[200]!),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.error_outline,
+                      color: Colors.red,
+                      size: 18,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        _errorMessage!,
+                        style: const TextStyle(color: Colors.red, fontSize: 13),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
+
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Icon(Icons.info_outline, color: _green, size: 18),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          'Logging at ${widget.centerName}. One entry per person — arrival only, no check-out needed.',
-                          style: const TextStyle(
-                            fontSize: 12.5,
-                            color: Color(0xFF1B5E20),
-                          ),
+                      _label('First Name'),
+                      const SizedBox(height: 6),
+                      TextFormField(
+                        controller: _firstNameController,
+                        style: const TextStyle(
+                          fontSize: 15,
+                          color: Color(0xFF1A1A2E),
+                        ),
+                        decoration: _decoration(
+                          'First name',
+                          Icons.person_outline,
+                        ),
+                        validator: (v) =>
+                            (v == null || v.trim().isEmpty) ? 'Required' : null,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _label('Middle Name'),
+                      const SizedBox(height: 6),
+                      TextFormField(
+                        controller: _middleNameController,
+                        style: const TextStyle(
+                          fontSize: 15,
+                          color: Color(0xFF1A1A2E),
+                        ),
+                        decoration: _decoration(
+                          'Optional',
+                          Icons.person_outline,
                         ),
                       ),
                     ],
                   ),
                 ),
-                const SizedBox(height: 18),
-
-                if (_errorMessage != null) ...[
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: Colors.red[50],
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.red[200]!),
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(
-                          Icons.error_outline,
-                          color: Colors.red,
-                          size: 18,
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(
-                            _errorMessage!,
-                            style: const TextStyle(
-                              color: Colors.red,
-                              fontSize: 13,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                ],
-
-                Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _label('First Name'),
-                          const SizedBox(height: 6),
-                          TextFormField(
-                            controller: _firstNameController,
-                            style: const TextStyle(
-                              fontSize: 15,
-                              color: Color(0xFF1A1A2E),
-                            ),
-                            decoration: _decoration(
-                              'First name',
-                              Icons.person_outline,
-                            ),
-                            validator: (v) => (v == null || v.trim().isEmpty)
-                                ? 'Required'
-                                : null,
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _label('Middle Name'),
-                          const SizedBox(height: 6),
-                          TextFormField(
-                            controller: _middleNameController,
-                            style: const TextStyle(
-                              fontSize: 15,
-                              color: Color(0xFF1A1A2E),
-                            ),
-                            decoration: _decoration(
-                              'Optional',
-                              Icons.person_outline,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-
-                Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _label('Last Name'),
-                          const SizedBox(height: 6),
-                          TextFormField(
-                            controller: _lastNameController,
-                            style: const TextStyle(
-                              fontSize: 15,
-                              color: Color(0xFF1A1A2E),
-                            ),
-                            decoration: _decoration(
-                              'Last name',
-                              Icons.person_outline,
-                            ),
-                            validator: (v) => (v == null || v.trim().isEmpty)
-                                ? 'Required'
-                                : null,
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _label('Suffix'),
-                          const SizedBox(height: 6),
-                          TextFormField(
-                            controller: _suffixController,
-                            style: const TextStyle(
-                              fontSize: 15,
-                              color: Color(0xFF1A1A2E),
-                            ),
-                            decoration: _decoration(
-                              'Jr., Sr., III',
-                              Icons.badge_outlined,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-
-                Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _label('Gender'),
-                          const SizedBox(height: 6),
-                          DropdownButtonFormField<String>(
-                            value: _selectedGender,
-                            isExpanded: true,
-                            decoration: _decoration(
-                              'Select',
-                              Icons.wc_outlined,
-                            ),
-                            items: const [
-                              DropdownMenuItem(
-                                value: 'Male',
-                                child: Text('Male'),
-                              ),
-                              DropdownMenuItem(
-                                value: 'Female',
-                                child: Text('Female'),
-                              ),
-                            ],
-                            onChanged: (v) =>
-                                setState(() => _selectedGender = v),
-                            validator: (v) => v == null ? 'Required' : null,
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _label('Age'),
-                          const SizedBox(height: 6),
-                          TextFormField(
-                            controller: _ageController,
-                            keyboardType: TextInputType.number,
-                            inputFormatters: [
-                              FilteringTextInputFormatter.digitsOnly,
-                            ],
-                            style: const TextStyle(
-                              fontSize: 15,
-                              color: Color(0xFF1A1A2E),
-                            ),
-                            decoration: _decoration('Age', Icons.cake_outlined),
-                            validator: (v) {
-                              if (v == null || v.trim().isEmpty)
-                                return 'Required';
-                              final n = int.tryParse(v.trim());
-                              if (n == null || n < 0 || n > 120)
-                                return 'Invalid age';
-                              return null;
-                            },
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-
-                _label('Barangay Address'),
-                const SizedBox(height: 6),
-                DropdownButtonFormField<String>(
-                  value: _selectedBarangay,
-                  isExpanded: true,
-                  decoration: _decoration(
-                    'Select barangay',
-                    Icons.location_on_outlined,
-                  ),
-                  items: _barangays
-                      .map((b) => DropdownMenuItem(value: b, child: Text(b)))
-                      .toList(),
-                  onChanged: (v) => setState(() => _selectedBarangay = v),
-                  validator: (v) =>
-                      v == null ? 'Please select a barangay' : null,
-                ),
-                const SizedBox(height: 16),
-
-                _label('Contact Number'),
-                const SizedBox(height: 6),
-                TextFormField(
-                  controller: _contactController,
-                  keyboardType: TextInputType.phone,
-                  style: const TextStyle(
-                    fontSize: 15,
-                    color: Color(0xFF1A1A2E),
-                  ),
-                  decoration: _decoration('Optional', Icons.phone_outlined),
-                ),
-                const SizedBox(height: 32),
-
-                SizedBox(
-                  width: double.infinity,
-                  height: 54,
-                  child: ElevatedButton(
-                    onPressed: _isSaving ? null : _handleSave,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: _navy,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(28),
-                      ),
-                      elevation: 3,
-                      shadowColor: _navy.withOpacity(0.4),
-                    ),
-                    child: _isSaving
-                        ? const SizedBox(
-                            width: 22,
-                            height: 22,
-                            child: CircularProgressIndicator(
-                              color: Colors.white,
-                              strokeWidth: 2.5,
-                            ),
-                          )
-                        : const Text(
-                            'LOG EVACUEE',
-                            style: TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.bold,
-                              letterSpacing: 0.6,
-                            ),
-                          ),
-                  ),
-                ),
-                const SizedBox(height: 24),
               ],
             ),
-          ),
+            const SizedBox(height: 16),
+
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _label('Last Name'),
+                      const SizedBox(height: 6),
+                      TextFormField(
+                        controller: _lastNameController,
+                        style: const TextStyle(
+                          fontSize: 15,
+                          color: Color(0xFF1A1A2E),
+                        ),
+                        decoration: _decoration(
+                          'Last name',
+                          Icons.person_outline,
+                        ),
+                        validator: (v) =>
+                            (v == null || v.trim().isEmpty) ? 'Required' : null,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _label('Suffix'),
+                      const SizedBox(height: 6),
+                      TextFormField(
+                        controller: _suffixController,
+                        style: const TextStyle(
+                          fontSize: 15,
+                          color: Color(0xFF1A1A2E),
+                        ),
+                        decoration: _decoration(
+                          'Jr., Sr., III',
+                          Icons.badge_outlined,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _label('Gender'),
+                      const SizedBox(height: 6),
+                      DropdownButtonFormField<String>(
+                        value: _selectedGender,
+                        isExpanded: true,
+                        decoration: _decoration('Select', Icons.wc_outlined),
+                        items: const [
+                          DropdownMenuItem(value: 'Male', child: Text('Male')),
+                          DropdownMenuItem(
+                            value: 'Female',
+                            child: Text('Female'),
+                          ),
+                        ],
+                        onChanged: (v) => setState(() => _selectedGender = v),
+                        validator: (v) => v == null ? 'Required' : null,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _label('Age'),
+                      const SizedBox(height: 6),
+                      TextFormField(
+                        controller: _ageController,
+                        keyboardType: TextInputType.number,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                        ],
+                        style: const TextStyle(
+                          fontSize: 15,
+                          color: Color(0xFF1A1A2E),
+                        ),
+                        decoration: _decoration('Age', Icons.cake_outlined),
+                        validator: (v) {
+                          if (v == null || v.trim().isEmpty) return 'Required';
+                          final n = int.tryParse(v.trim());
+                          if (n == null || n < 0 || n > 120)
+                            return 'Invalid age';
+                          return null;
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+
+            _label('Barangay Address'),
+            const SizedBox(height: 6),
+            DropdownButtonFormField<String>(
+              value: _selectedBarangay,
+              isExpanded: true,
+              decoration: _decoration(
+                'Select barangay',
+                Icons.location_on_outlined,
+              ),
+              items: _barangays
+                  .map((b) => DropdownMenuItem(value: b, child: Text(b)))
+                  .toList(),
+              onChanged: (v) => setState(() => _selectedBarangay = v),
+              validator: (v) => v == null ? 'Please select a barangay' : null,
+            ),
+            const SizedBox(height: 16),
+
+            _label('Contact Number'),
+            const SizedBox(height: 6),
+            TextFormField(
+              controller: _contactController,
+              keyboardType: TextInputType.phone,
+              style: const TextStyle(fontSize: 15, color: Color(0xFF1A1A2E)),
+              decoration: _decoration('Optional', Icons.phone_outlined),
+            ),
+            const SizedBox(height: 32),
+
+            SizedBox(
+              width: double.infinity,
+              height: 54,
+              child: ElevatedButton(
+                onPressed: _isSaving ? null : _handleSave,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _navy,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(28),
+                  ),
+                  elevation: 3,
+                  shadowColor: _navy.withOpacity(0.4),
+                ),
+                child: _isSaving
+                    ? const SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: CircularProgressIndicator(
+                          color: Colors.white,
+                          strokeWidth: 2.5,
+                        ),
+                      )
+                    : const Text(
+                        'LOG EVACUEE',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 0.6,
+                        ),
+                      ),
+              ),
+            ),
+            const SizedBox(height: 24),
+          ],
         ),
       ),
     );

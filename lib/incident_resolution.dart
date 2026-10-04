@@ -45,7 +45,7 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
     super.dispose();
   }
 
-  Future<void> _pickImage() async {
+  Future<void> _pickImageFromCamera() async {
     try {
       final picker = ImagePicker();
       final picked = await picker.pickImage(
@@ -64,6 +64,97 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
         ),
       );
     }
+  }
+
+  Future<void> _pickImageFromGallery() async {
+    try {
+      final picker = ImagePicker();
+      final picked = await picker.pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 80,
+      );
+      if (picked != null) {
+        setState(() => _photo = File(picked.path));
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not open gallery: $e'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
+  }
+
+  /// Lets the responder pick where the photo comes from, same
+  /// take-a-photo / choose-from-gallery pattern used on the citizen
+  /// Report Incident screen, instead of jumping straight to the camera.
+  void _showImageSourceSheet() {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Upload Photo',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                  color: Color(0xFF1A1A2E),
+                ),
+              ),
+              const SizedBox(height: 16),
+              ListTile(
+                leading: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: _navy.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(Icons.camera_alt_outlined, color: _navy),
+                ),
+                title: const Text(
+                  'Take a Photo',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+                subtitle: const Text('Open camera'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _pickImageFromCamera();
+                },
+              ),
+              ListTile(
+                leading: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: _navy.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(Icons.photo_library_outlined, color: _navy),
+                ),
+                title: const Text(
+                  'Choose from Gallery',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+                subtitle: const Text('Pick from your photos'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _pickImageFromGallery();
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   void _removePhoto() => setState(() => _photo = null);
@@ -270,7 +361,7 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
               ),
               const SizedBox(height: 8),
               GestureDetector(
-                onTap: _photo == null ? _pickImage : null,
+                onTap: _photo == null ? _showImageSourceSheet : null,
                 child: Container(
                   width: double.infinity,
                   height: 150,

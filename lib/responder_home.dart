@@ -36,6 +36,13 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
   bool _incidentsLoading = true;
   String? _incidentsError;
 
+  // MSWD's home screen shows a Recent Alerts card where the Critical
+  // Alerts section normally goes (see build() below) — same card the
+  // citizen app's home.dart uses. This key lets pull-to-refresh on the
+  // whole screen also trigger that card's own alerts fetch, same as
+  // the citizen app does.
+  final GlobalKey<_RecentAlertsCardState> _alertsCardKey = GlobalKey();
+
   @override
   void initState() {
     super.initState();
@@ -89,7 +96,13 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
   }
 
   Future<void> _refreshAll() async {
-    await Future.wait([_loadResponder(), _loadIncidents()]);
+    await Future.wait([
+      _loadResponder(),
+      _loadIncidents(),
+      // Only ever mounted for MSWD (see build() below) — null, and a
+      // no-op, for every other agency.
+      _alertsCardKey.currentState?.refresh() ?? Future.value(),
+    ]);
   }
 
   Future<void> _handleLogout() async {
@@ -416,12 +429,20 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
                             ],
                     ),
 
-                    // ── Critical Alerts ─────────────────────────────
-                    // MSWD doesn't respond to incidents, so this whole
-                    // section (critical-priority dispatch cards) is
-                    // hidden for that agency — nothing here is
-                    // actionable for them.
-                    if (!isMswd) ...[
+                    // ── Critical Alerts (MSWD gets Recent Alerts) ───
+                    // MSWD doesn't respond to incidents, so the
+                    // critical-priority dispatch section below (none of
+                    // it is actionable for them) is swapped for a
+                    // Recent Alerts card instead — the same card the
+                    // citizen app shows at the bottom of its own home
+                    // screen (see home.dart's _RecentAlertsCard) —
+                    // so MSWD still has something informational down
+                    // here instead of the screen just ending at the
+                    // Quick Access grid.
+                    if (isMswd) ...[
+                      const SizedBox(height: 24),
+                      _RecentAlertsCard(key: _alertsCardKey),
+                    ] else ...[
                       const SizedBox(height: 28),
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -838,6 +859,203 @@ class _EmptyStateCard extends StatelessWidget {
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 13, color: Colors.grey[500]),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════
+// Recent Alerts card — shown at the bottom of MSWD's home screen only
+// (see build() above). A direct port of the citizen app's home.dart
+// _RecentAlertsCard: same 3-day cutoff, same 3-item cap, same row
+// layout and "time ago" labels — "See all" just points at this app's
+// own _DisasterAlertsScreen instead of the citizen app's AlertsScreen.
+// ══════════════════════════════════════════════════════════════════
+
+class _RecentAlertsCard extends StatefulWidget {
+  const _RecentAlertsCard({super.key});
+
+  @override
+  State<_RecentAlertsCard> createState() => _RecentAlertsCardState();
+}
+
+class _RecentAlertsCardState extends State<_RecentAlertsCard> {
+  bool _isLoading = true;
+  List<Map<String, dynamic>> _alerts = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAlerts();
+  }
+
+  Future<void> refresh() => _loadAlerts();
+
+  Future<void> _loadAlerts() async {
+    if (mounted) setState(() => _isLoading = true);
+
+    final result = await ApiService.getAlerts();
+    if (!mounted) return;
+
+    setState(() {
+      _isLoading = false;
+      if (result.success && result.data is List) {
+        final cutoff = DateTime.now().subtract(const Duration(days: 3));
+        _alerts = (result.data as List)
+            .map((e) => e as Map<String, dynamic>)
+            .where((alert) {
+              final created = DateTime.tryParse(
+                alert['created_at']?.toString() ?? '',
+              );
+              return created != null && created.isAfter(cutoff);
+            })
+            .take(3)
+            .toList();
+      }
+    });
+  }
+
+  String _timeAgo(String? createdAt) {
+    if (createdAt == null) return '';
+    final date = DateTime.tryParse(createdAt);
+    if (date == null) return '';
+    final diff = DateTime.now().difference(date);
+    if (diff.inMinutes < 1) return 'Just now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return '${diff.inHours}h ago';
+    return '${diff.inDays}d ago';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.06),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'Recent Alerts',
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF1A1A2E),
+                ),
+              ),
+              GestureDetector(
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const _DisasterAlertsScreen(),
+                  ),
+                ),
+                child: const Text(
+                  'See all',
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                    color: _gradientTop,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (_isLoading)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 12),
+              child: Center(
+                child: SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2.2),
+                ),
+              ),
+            )
+          else if (_alerts.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Text(
+                'No alerts yet.',
+                style: TextStyle(fontSize: 13, color: Colors.grey[500]),
+              ),
+            )
+          else
+            ..._alerts.map((alert) {
+              final isAlertType = alert['type'] == 'Alerts';
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      width: 34,
+                      height: 34,
+                      decoration: BoxDecoration(
+                        color: isAlertType
+                            ? const Color(0xFFFFEBEE)
+                            : const Color(0xFFE3F2FD),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        isAlertType
+                            ? Icons.warning_amber_rounded
+                            : Icons.info_outline,
+                        color: isAlertType
+                            ? const Color(0xFFD32F2F)
+                            : const Color(0xFF1565C0),
+                        size: 17,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            alert['title'] ?? '',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13.5,
+                              color: Color(0xFF1A1A2E),
+                            ),
+                          ),
+                          if (alert['subtitle'] != null) ...[
+                            const SizedBox(height: 1),
+                            Text(
+                              alert['subtitle'],
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey[600],
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                    Text(
+                      _timeAgo(alert['created_at']),
+                      style: TextStyle(fontSize: 11, color: Colors.grey[400]),
+                    ),
+                  ],
+                ),
+              );
+            }),
         ],
       ),
     );
@@ -1917,6 +2135,13 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
   // looking at the same incident at the same time.
   String? _myResponderId;
 
+  // This device's own agency — used only to recognize an MSWD account
+  // (see _isMswd below). MSWD can still reach this screen from the
+  // Incident Locations map (shown to them for situational awareness —
+  // see responder_home.dart's isMswd), so this screen has to check for
+  // itself rather than relying on never being opened by one.
+  String? _myAgency;
+
   // Mutable local copy so a successful accept call can update who's
   // shown as "responding" immediately, without waiting on a full list
   // refresh from the home screen.
@@ -1933,7 +2158,10 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
   Future<void> _loadMyResponderId() async {
     final me = await ApiService.getResponder();
     if (!mounted || me == null) return;
-    setState(() => _myResponderId = me['id']?.toString());
+    setState(() {
+      _myResponderId = me['id']?.toString();
+      _myAgency = me['agency']?.toString();
+    });
   }
 
   List<Map<String, dynamic>> get _responders {
@@ -1952,6 +2180,17 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
       _myResponderId != null &&
       _responders.any((r) => r['id']?.toString() == _myResponderId);
 
+  /// MSWD manages evacuation centers, not incident response — see
+  /// responder_home.dart's isMswd, which hides Active Incidents, Report
+  /// History, Accepted Missions and Critical Alerts from their home
+  /// screen entirely. Incident Locations is the one exception (kept for
+  /// situational awareness), so this is the screen that has to draw the
+  /// line instead: no Accept/Decline for MSWD, just the informational
+  /// banner below. Api\IncidentController::accept() rejects an MSWD
+  /// token regardless — this only keeps that account from tapping a
+  /// button that can never succeed.
+  bool get _isMswd => _myAgency == 'MSWD';
+
   /// Once an incident is resolved — by this responder, a teammate, or
   /// anyone else on it — there is nothing left to accept, decline, or
   /// resolve again. Without this check, a responder who had already
@@ -1969,6 +2208,22 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
       double.tryParse('${incident['longitude'] ?? ''}') ?? 120.6263;
 
   Future<void> _handleAccept() async {
+    // MSWD doesn't respond to incidents. The button is hidden in this
+    // case too (see build() below) — this only guards a stale tap
+    // racing the rebuild, since Api\IncidentController::accept()
+    // rejects an MSWD token regardless.
+    if (_isMswd) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'MSWD accounts manage evacuation centers, not incident response.',
+          ),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
     // Already resolved — nothing to accept. The button is hidden in
     // this case too, but this guards against a stale tap racing the
     // rebuild (e.g. another responder resolved it moments earlier).
@@ -2099,7 +2354,7 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
   }
 
   Future<void> _handleDecline() async {
-    if (_iHaveJoined || _isResolved) return;
+    if (_isMswd || _iHaveJoined || _isResolved) return;
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -2523,6 +2778,44 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
                             fontWeight: FontWeight.bold,
                             color: Color(0xFF2E7D32),
                             letterSpacing: 0.3,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ] else if (_isMswd) ...[
+                  // MSWD reaches this screen from the Incident
+                  // Locations map (kept visible to them for situational
+                  // awareness — see responder_home.dart's isMswd), but
+                  // they never respond to incidents, so no Accept/
+                  // Decline here — just a plain explanation.
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 16,
+                      horizontal: 16,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFE3F2FD),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Row(
+                      children: const [
+                        Icon(
+                          Icons.info_outline,
+                          color: Color(0xFF1565C0),
+                          size: 20,
+                        ),
+                        SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            'MSWD accounts manage evacuation centers, not '
+                            'incident response.',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF1565C0),
+                            ),
                           ),
                         ),
                       ],

@@ -670,27 +670,54 @@ class _ResponderEvacuationCentersScreenState
                                             Expanded(
                                               child: SizedBox(
                                                 height: 34,
+                                                // Disabled (onPressed: null)
+                                                // and relabeled once a center
+                                                // is full/closed, so an MSWD
+                                                // responder sees it can't be
+                                                // logged here right on the
+                                                // list — before they tap in,
+                                                // fill the form, and only
+                                                // then find out. The backend
+                                                // still re-checks this on
+                                                // submit regardless (see
+                                                // Api\EvacuationCenterController
+                                                // ::storeEvacuee) in case
+                                                // status changes between list
+                                                // load and submit.
                                                 child: ElevatedButton.icon(
-                                                  onPressed: () =>
-                                                      Navigator.push(
-                                                        context,
-                                                        MaterialPageRoute(
-                                                          builder: (_) =>
-                                                              LogEvacueeScreen(
-                                                                centerId:
-                                                                    center.id,
-                                                                centerName:
-                                                                    center.name,
-                                                              ),
-                                                        ),
-                                                      ),
-                                                  icon: const Icon(
-                                                    Icons.how_to_reg,
+                                                  onPressed:
+                                                      center.acceptsEvacuees
+                                                      ? () => Navigator.push(
+                                                          context,
+                                                          MaterialPageRoute(
+                                                            builder: (_) =>
+                                                                LogEvacueeScreen(
+                                                                  centerId:
+                                                                      center.id,
+                                                                  centerName:
+                                                                      center
+                                                                          .name,
+                                                                  centerStatus:
+                                                                      center
+                                                                          .status,
+                                                                ),
+                                                          ),
+                                                        )
+                                                      : null,
+                                                  icon: Icon(
+                                                    center.acceptsEvacuees
+                                                        ? Icons.how_to_reg
+                                                        : Icons.block,
                                                     size: 16,
                                                   ),
-                                                  label: const Text(
-                                                    'Log Evacuee',
-                                                    style: TextStyle(
+                                                  label: Text(
+                                                    center.acceptsEvacuees
+                                                        ? 'Log Evacuee'
+                                                        : (center.status ==
+                                                                  'closed'
+                                                              ? 'Closed'
+                                                              : 'Full'),
+                                                    style: const TextStyle(
                                                       fontSize: 12.5,
                                                       fontWeight:
                                                           FontWeight.w700,
@@ -698,9 +725,13 @@ class _ResponderEvacuationCentersScreenState
                                                   ),
                                                   style: ElevatedButton.styleFrom(
                                                     backgroundColor:
-                                                        _gradientTop,
+                                                        center.acceptsEvacuees
+                                                        ? _gradientTop
+                                                        : Colors.grey[300],
                                                     foregroundColor:
-                                                        Colors.white,
+                                                        center.acceptsEvacuees
+                                                        ? Colors.white
+                                                        : Colors.grey[600],
                                                     elevation: 0,
                                                     padding: EdgeInsets.zero,
                                                     shape: RoundedRectangleBorder(
@@ -757,6 +788,13 @@ class _EvacCenter {
   });
 
   LatLng get location => LatLng(latitude, longitude);
+
+  /// Whether this center can take a newly-logged evacuee right now —
+  /// only when a human (MSWD) has it explicitly marked 'open'. 'full'
+  /// and 'closed' both block logging; see
+  /// Api\EvacuationCenterController::storeEvacuee for the server-side
+  /// enforcement of the same rule.
+  bool get acceptsEvacuees => status == 'open';
 
   factory _EvacCenter.fromJson(Map<String, dynamic> json) {
     return _EvacCenter(

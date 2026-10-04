@@ -3,7 +3,21 @@ import 'api_service.dart';
 import 'responder_login.dart';
 
 const Color _navy = Color(0xFF0D1B4C);
+const Color _navyDeep = Color(0xFF081130);
 const Color _ink = Color(0xFF1A1A2E);
+const Color _chipBg = Color(0xFFE8EAF4);
+
+/// Same agency → icon mapping used elsewhere in the app (see
+/// responder_home.dart), so a responder's badge here matches the icon
+/// shown for their agency everywhere else. Falls back to a generic
+/// shield if the account's agency is missing or unrecognized.
+const Map<String, IconData> _agencyIcons = {
+  'PNP': Icons.local_police,
+  'BFP': Icons.local_fire_department,
+  'SARS': Icons.health_and_safety,
+  'HCU': Icons.medical_services,
+  'MSWD': Icons.volunteer_activism,
+};
 
 class ResponderProfileScreen extends StatefulWidget {
   const ResponderProfileScreen({super.key});
@@ -89,63 +103,116 @@ class _ResponderProfileScreenState extends State<ResponderProfileScreen> {
   Widget build(BuildContext context) {
     final String name = _responder?['full_name'] ?? 'Responder';
     final String email = _responder?['email']?.toString() ?? '';
+    final String agency = _responder?['agency']?.toString() ?? '';
+    final IconData badgeIcon = _agencyIcons[agency] ?? Icons.shield_outlined;
 
     return Scaffold(
       backgroundColor: const Color(0xFFF5F6FA),
       appBar: AppBar(
-        backgroundColor: Colors.white,
+        backgroundColor: _navy,
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: _ink),
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
           onPressed: () => Navigator.pop(context),
         ),
         title: const Text(
           'Profile',
           style: TextStyle(
-            color: _ink,
+            color: Colors.white,
             fontWeight: FontWeight.bold,
             fontSize: 18,
           ),
         ),
         centerTitle: true,
       ),
+      // Loading state intentionally stays plain (navy app bar + spinner on
+      // the light body) — the badge header below only makes sense once we
+      // actually know which agency to show, so it's skipped rather than
+      // shown empty/flickering.
       body: _isLoading
           ? const Center(child: CircularProgressIndicator(color: _navy))
           : SafeArea(
+              top: false,
               child: SingleChildScrollView(
                 child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    const SizedBox(height: 24),
-
+                    // ── Identity badge ──
+                    // Responder accounts are shared per agency/station, not
+                    // individual logins (see Responder-api_service.dart),
+                    // so this reads as an agency credential — badge icon +
+                    // agency/station name + an explicit "shared account"
+                    // tag — rather than a personal avatar and name.
                     Container(
-                      width: 96,
-                      height: 96,
+                      width: double.infinity,
+                      padding: const EdgeInsets.fromLTRB(24, 28, 24, 32),
                       decoration: const BoxDecoration(
-                        color: Color(0xFFEDE7F6),
-                        shape: BoxShape.circle,
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [_navy, _navyDeep],
+                        ),
+                        borderRadius: BorderRadius.only(
+                          bottomLeft: Radius.circular(28),
+                          bottomRight: Radius.circular(28),
+                        ),
                       ),
-                      child: const Icon(
-                        Icons.person_outline_rounded,
-                        color: Color(0xFF5B3FA8),
-                        size: 52,
+                      child: Column(
+                        children: [
+                          Container(
+                            width: 88,
+                            height: 88,
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.14),
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: Colors.white.withOpacity(0.35),
+                                width: 1.5,
+                              ),
+                            ),
+                            child: Icon(
+                              badgeIcon,
+                              color: Colors.white,
+                              size: 40,
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          Text(
+                            name,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              fontSize: 19,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white,
+                              height: 1.3,
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 5,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.14),
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: const Text(
+                              'Shared agency account',
+                              style: TextStyle(
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
 
-                    const SizedBox(height: 16),
-
-                    Text(
-                      name,
-                      style: const TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                        color: _ink,
-                      ),
-                    ),
-
-                    const SizedBox(height: 28),
-
+                    // ── Menu + logout ──
                     Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      padding: const EdgeInsets.fromLTRB(20, 28, 20, 24),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -153,8 +220,6 @@ class _ResponderProfileScreenState extends State<ResponderProfileScreen> {
                           const SizedBox(height: 10),
                           _MenuItem(
                             icon: Icons.person_outline,
-                            iconBg: const Color(0xFFE3F2FD),
-                            iconColor: const Color(0xFF1565C0),
                             label: 'Personal Information',
                             subtitle: email.isNotEmpty
                                 ? email
@@ -164,20 +229,16 @@ class _ResponderProfileScreenState extends State<ResponderProfileScreen> {
                           const SizedBox(height: 10),
                           _MenuItem(
                             icon: Icons.notifications_none_rounded,
-                            iconBg: const Color(0xFFFFF3E0),
-                            iconColor: const Color(0xFFF57C00),
                             label: 'Notification Settings',
                             subtitle: 'Manage alerts and push notifications',
                             onTap: () {},
                           ),
 
-                          const SizedBox(height: 22),
+                          const SizedBox(height: 24),
                           const _SectionLabel('About'),
                           const SizedBox(height: 10),
                           _MenuItem(
-                            icon: Icons.star_outline_rounded,
-                            iconBg: const Color(0xFFF3E5F5),
-                            iconColor: const Color(0xFF6A1B9A),
+                            icon: Icons.info_outline_rounded,
                             label: 'About ResQPulse',
                             subtitle: 'App version, terms, and support',
                             onTap: () {},
@@ -226,7 +287,6 @@ class _ResponderProfileScreenState extends State<ResponderProfileScreen> {
                               ),
                             ),
                           ),
-                          const SizedBox(height: 24),
                         ],
                       ),
                     ),
@@ -245,12 +305,11 @@ class _SectionLabel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Text(
-      text.toUpperCase(),
-      style: TextStyle(
-        fontSize: 11.5,
+      text,
+      style: const TextStyle(
+        fontSize: 13.5,
         fontWeight: FontWeight.bold,
-        color: Colors.grey[500],
-        letterSpacing: 0.6,
+        color: _ink,
       ),
     );
   }
@@ -258,16 +317,12 @@ class _SectionLabel extends StatelessWidget {
 
 class _MenuItem extends StatelessWidget {
   final IconData icon;
-  final Color iconBg;
-  final Color iconColor;
   final String label;
   final String subtitle;
   final VoidCallback onTap;
 
   const _MenuItem({
     required this.icon,
-    required this.iconBg,
-    required this.iconColor,
     required this.label,
     required this.subtitle,
     required this.onTap,
@@ -296,10 +351,10 @@ class _MenuItem extends StatelessWidget {
               width: 42,
               height: 42,
               decoration: BoxDecoration(
-                color: iconBg,
+                color: _chipBg,
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: Icon(icon, color: iconColor, size: 20),
+              child: Icon(icon, color: _navy, size: 20),
             ),
             const SizedBox(width: 14),
             Expanded(
