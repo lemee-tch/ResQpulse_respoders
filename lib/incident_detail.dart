@@ -98,10 +98,19 @@ class _IncidentDetailScreenState extends State<IncidentDetailScreen> {
 
   String? get _reporterMobile => _incident['citizen']?['mobile']?.toString();
 
+  /// Formats created_at (a true UTC API timestamp, "...Z") as Manila
+  /// (UTC+8) wall-clock time by adding the fixed 8-hour offset
+  /// directly, rather than calling .toLocal() and trusting the
+  /// device's own timezone setting — same reasoning as the citizen
+  /// app's alert.dart (_formatManila): every ResQPulse responder is
+  /// physically in Rosales, Pangasinan, but a test device/emulator
+  /// commonly defaults its system clock to UTC, which .toLocal() would
+  /// silently trust instead and show times 8 hours off.
   String get _formattedDate {
     final raw = _incident['created_at']?.toString();
-    final date = DateTime.tryParse(raw ?? '');
-    if (date == null) return '';
+    final utc = DateTime.tryParse(raw ?? '')?.toUtc();
+    if (utc == null) return '';
+    final date = utc.add(const Duration(hours: 8));
     const months = [
       'Jan',
       'Feb',

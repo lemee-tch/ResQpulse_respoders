@@ -903,15 +903,24 @@ const List<String> _months = [
   'Dec',
 ];
 
+/// Formats a true UTC API timestamp ("...Z") as Manila (UTC+8)
+/// wall-clock time by adding the fixed 8-hour offset directly, rather
+/// than calling .toLocal() and trusting the device's own timezone
+/// setting — same reasoning as the citizen app's alert.dart
+/// (_formatManila): every ResQPulse responder is physically in
+/// Rosales, Pangasinan, but a test device/emulator commonly defaults
+/// its system clock to UTC, which .toLocal() would silently trust
+/// instead and show times 8 hours off.
 String _formatDateTime(String? iso) {
   if (iso == null) return '';
-  final date = DateTime.tryParse(iso);
-  if (date == null) return '';
-  final hour12 = date.hour % 12 == 0 ? 12 : date.hour % 12;
-  final minute = date.minute.toString().padLeft(2, '0');
-  final period = date.hour >= 12 ? 'PM' : 'AM';
-  final month = _months[date.month - 1];
-  return '$hour12:$minute $period - $month ${date.day}, ${date.year}';
+  final utc = DateTime.tryParse(iso)?.toUtc();
+  if (utc == null) return '';
+  final manila = utc.add(const Duration(hours: 8));
+  final hour12 = manila.hour % 12 == 0 ? 12 : manila.hour % 12;
+  final minute = manila.minute.toString().padLeft(2, '0');
+  final period = manila.hour >= 12 ? 'PM' : 'AM';
+  final month = _months[manila.month - 1];
+  return '$hour12:$minute $period - $month ${manila.day}, ${manila.year}';
 }
 
 const List<String> _weekdays = [
@@ -1534,7 +1543,7 @@ class _AlertData {
   final String? subtitle;
   final String? body;
   final String dateTime;
-  final DateTime? createdAt;
+  final DateTime? createdAtUtc;
   final String type;
 
   const _AlertData({
@@ -1542,17 +1551,28 @@ class _AlertData {
     required this.subtitle,
     required this.body,
     required this.dateTime,
-    required this.createdAt,
+    required this.createdAtUtc,
     required this.type,
   });
 
   factory _AlertData.fromJson(Map<String, dynamic> json) {
+    // Same reasoning as the citizen app's alert.dart: keep this as a
+    // true UTC instant (.toUtc(), not .toLocal()) and add a fixed
+    // Manila (UTC+8) offset in _formatManila() below, instead of
+    // trusting the device's own timezone setting — a test
+    // device/emulator commonly defaults its system clock to UTC, even
+    // though every ResQPulse responder is physically in Rosales,
+    // Pangasinan.
+    final createdAtUtc = DateTime.tryParse(
+      json['created_at']?.toString() ?? '',
+    )?.toUtc();
+
     return _AlertData(
       title: json['title'] ?? '',
       subtitle: json['subtitle'],
       body: json['body'],
-      dateTime: _formatAlertDate(json['created_at']),
-      createdAt: DateTime.tryParse(json['created_at']?.toString() ?? ''),
+      dateTime: _formatManila(createdAtUtc),
+      createdAtUtc: createdAtUtc,
       type: json['type'] ?? 'Alerts',
     );
   }
@@ -1572,17 +1592,18 @@ class _AlertData {
     'Dec',
   ];
 
-  static String _formatAlertDate(String? isoString) {
-    if (isoString == null) return '';
-    final date = DateTime.tryParse(isoString);
-    if (date == null) return '';
+  /// Formats a true UTC instant as Manila (UTC+8) wall-clock time by
+  /// adding the fixed 8-hour offset directly — see fromJson() above.
+  static String _formatManila(DateTime? utc) {
+    if (utc == null) return '';
+    final manila = utc.add(const Duration(hours: 8));
 
-    final month = _months[date.month - 1];
-    final hour12 = date.hour % 12 == 0 ? 12 : date.hour % 12;
-    final minute = date.minute.toString().padLeft(2, '0');
-    final period = date.hour >= 12 ? 'PM' : 'AM';
+    final month = _months[manila.month - 1];
+    final hour12 = manila.hour % 12 == 0 ? 12 : manila.hour % 12;
+    final minute = manila.minute.toString().padLeft(2, '0');
+    final period = manila.hour >= 12 ? 'PM' : 'AM';
 
-    return '$month ${date.day}, ${date.year} - $hour12:$minute $period';
+    return '$month ${manila.day}, ${manila.year} - $hour12:$minute $period';
   }
 }
 
@@ -1724,7 +1745,9 @@ class _DisasterAlertsScreenState extends State<_DisasterAlertsScreen> {
     if (_selectedTab == 'Recent alerts') {
       final cutoff = DateTime.now().subtract(const Duration(days: 7));
       return _allAlerts
-          .where((a) => a.createdAt != null && a.createdAt!.isAfter(cutoff))
+          .where(
+            (a) => a.createdAtUtc != null && a.createdAtUtc!.isAfter(cutoff),
+          )
           .toList();
     }
     return _allAlerts;
@@ -1929,12 +1952,36 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
       _myResponderId != null &&
       _responders.any((r) => r['id']?.toString() == _myResponderId);
 
+  /// Once an incident is resolved — by this responder, a teammate, or
+  /// anyone else on it — there is nothing left to accept, decline, or
+  /// resolve again. Without this check, a responder who had already
+  /// joined kept seeing "START NAVIGATING"/"SUBMIT REPORT" for an
+  /// incident that was already closed out (stale local `incident` copy,
+  /// no live refresh), and could re-submit a resolve that the backend
+  /// would only reject after the fact (see Api\IncidentController::
+  /// resolve()'s 409 guard). Same status check the standalone
+  /// incident_detail.dart screen already uses (`_isResolved`).
+  bool get _isResolved => incident['status'] == 'resolved';
+
   double get _lat =>
       double.tryParse('${incident['latitude'] ?? ''}') ?? 15.8952;
   double get _lng =>
       double.tryParse('${incident['longitude'] ?? ''}') ?? 120.6263;
 
   Future<void> _handleAccept() async {
+    // Already resolved — nothing to accept. The button is hidden in
+    // this case too, but this guards against a stale tap racing the
+    // rebuild (e.g. another responder resolved it moments earlier).
+    if (_isResolved) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('This incident has already been resolved.'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
     // Already joined by THIS responder — nothing to confirm, just say
     // so. The Accept button is disabled in this case too, but this
     // guards against a stale tap racing the rebuild.
@@ -2008,10 +2055,17 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
     setState(() => _isSubmitting = false);
 
     if (!result.success) {
-      // Only a genuine failure (network error, incident already
-      // resolved, etc.) reaches here now — joining as backup never
-      // "loses a race", so there's no partial-success incident data to
-      // recover from the error response anymore.
+      // A 409 here (incident already resolved, or some other genuine
+      // failure) still carries the up-to-date `incident` when the
+      // backend sends one — pick it up so this screen's buttons reflect
+      // reality (e.g. switch to the resolved state) instead of staying
+      // stale and inviting another failed tap.
+      final data = result.data;
+      if (data is Map && data['incident'] is Map) {
+        setState(
+          () => incident = Map<String, dynamic>.from(data['incident'] as Map),
+        );
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(result.error ?? 'Could not accept this mission.'),
@@ -2045,7 +2099,7 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
   }
 
   Future<void> _handleDecline() async {
-    if (_iHaveJoined) return;
+    if (_iHaveJoined || _isResolved) return;
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -2231,7 +2285,26 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
                         ),
                       ),
                     ),
-                    if (_hasResponders)
+                    if (_isResolved)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 5,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFE8F5E9),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: const Text(
+                          'Resolved',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF2E7D32),
+                          ),
+                        ),
+                      )
+                    else if (_hasResponders)
                       Container(
                         padding: const EdgeInsets.symmetric(
                           horizontal: 10,
@@ -2421,14 +2494,48 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
 
                 const SizedBox(height: 30),
 
-                // Once this responder has already joined, "ACCEPT
-                // MISSION" no longer makes sense — but the old version
-                // just showed a permanently-disabled "YOU'RE RESPONDING"
-                // button with nowhere to go, a dead end for anyone
-                // reaching this incident from Accepted Missions. Same
-                // NavigationScreen/IncidentResolutionScreen destinations
-                // the standalone incident_detail.dart already uses.
-                if (_iHaveJoined) ...[
+                // Resolved first: regardless of whether this responder
+                // ever joined, once the incident is closed out there is
+                // nothing left to do here — no navigating, no filing a
+                // resolution, no accepting/declining. Shown instead of
+                // either action-button set below.
+                if (_isResolved) ...[
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFE8F5E9),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: const [
+                        Icon(
+                          Icons.check_circle,
+                          color: Color(0xFF2E7D32),
+                          size: 20,
+                        ),
+                        SizedBox(width: 8),
+                        Text(
+                          'Incident Resolved',
+                          style: TextStyle(
+                            fontSize: 14.5,
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF2E7D32),
+                            letterSpacing: 0.3,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ] else if (_iHaveJoined) ...[
+                  // Once this responder has already joined, "ACCEPT
+                  // MISSION" no longer makes sense — but the old version
+                  // just showed a permanently-disabled "YOU'RE RESPONDING"
+                  // button with nowhere to go, a dead end for anyone
+                  // reaching this incident from Accepted Missions. Same
+                  // NavigationScreen/IncidentResolutionScreen destinations
+                  // the standalone incident_detail.dart already uses.
                   SizedBox(
                     width: double.infinity,
                     height: 52,

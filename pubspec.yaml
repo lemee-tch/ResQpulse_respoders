@@ -1,3 +1,14 @@
+# Responder app's pubspec.yaml (name: responders). Kept at this path
+# instead of the bare "pubspec.yaml" because this project also has a
+# same-named pubspec.yaml for the citizen app (name: rescue_pulse) — the
+# two bare-path docs are ambiguous, so this disambiguated copy is the one
+# to copy into the responder app's actual pubspec.yaml. Added
+# flutter_local_notifications and audioplayers (bottom of the
+# dependencies: block), plus assets/sounds/incident_ring.mp3 below, for
+# the incoming-call-style incident alert — see incident_alert_service.dart.
+# (audioplayers replaced an earlier flutter_ringtone_player-based version
+# once a real downloaded ringtone mp3 was in the picture — it can loop a
+# bundled asset file directly instead of only playing system sounds.)
 name: responders
 description: "A new Flutter project."
 # The following line prevents the package from being accidentally published to
@@ -35,6 +46,8 @@ dependencies:
   url_launcher: ^6.3.1
   geolocator: ^13.0.2
   image_picker: ^1.1.2
+  flutter_local_notifications: ^17.2.3
+  audioplayers: ^6.7.1
 
 dev_dependencies:
   flutter_test:
@@ -60,3 +73,4 @@ flutter:
   uses-material-design: true
   assets:
     - assets/logo.png
+    - assets/sounds/alarm-sound.mp3
