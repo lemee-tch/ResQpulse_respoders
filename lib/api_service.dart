@@ -308,16 +308,16 @@ class ApiService {
     }
   }
 
-  /// Marks an incident resolved from the field — see
-  /// IncidentResolutionScreen. Multipart because the photo is optional
-  /// but, when present, is a file a plain JSON POST can't carry. A 409
-  /// means someone else already resolved it moments earlier; the
-  /// response still carries the current `incident` so the caller can
-  /// update its local copy instead of just showing a generic error.
+  /// Marks an incident resolved from the field AND files the MDRRMC
+  /// Incident Report. [report] is the form data (see
+  /// IncidentResolutionScreen); it travels as one JSON string field so the
+  /// nested casualty lists survive the multipart upload. The server turns
+  /// it into the PDF attached to the resolution.
   static Future<ApiResponse> resolveIncident(
     int incidentId, {
     String? notes,
     File? photo,
+    Map<String, dynamic>? report,
   }) async {
     try {
       final uri = Uri.parse('$baseUrl/responder/incidents/$incidentId/resolve');
@@ -330,27 +330,54 @@ class ApiService {
       if (notes != null && notes.isNotEmpty) {
         request.fields['notes'] = notes;
       }
+      if (report != null) {
+        request.fields['report'] = jsonEncode(report);
+      }
       if (photo != null) {
         request.files.add(
           await http.MultipartFile.fromPath('photo', photo.path),
         );
       }
 
-      final streamedResponse = await request.send().timeout(
-        const Duration(seconds: 20),
+      // Longer than a normal call: the server also renders the PDF.
+      final streamed = await request.send().timeout(
+        const Duration(seconds: 60),
       );
-      final response = await http.Response.fromStream(streamedResponse);
-      final data = jsonDecode(response.body);
+      final response = await http.Response.fromStream(streamed);
+
+      dynamic data;
+      try {
+        data = jsonDecode(response.body);
+      } catch (_) {
+        data = null;
+      }
 
       if (response.statusCode == 200) {
         return ApiResponse.success(data);
       }
-      return ApiResponse.error(
-        data['message'] ?? 'Could not mark this incident resolved.',
-        data: data,
-      );
+
+      String message = 'Could not mark this incident resolved.';
+      if (data is Map) {
+        if (data['message'] != null) message = data['message'].toString();
+        final errors = data['errors'];
+        if (errors is Map && errors.isNotEmpty) {
+          final first = errors.values.first;
+          message = (first is List && first.isNotEmpty ? first.first : first)
+              .toString();
+        }
+      }
+      return ApiResponse.error(message, data: data);
     } catch (e) {
-      return ApiResponse.error(_handleError(e));
+      final msg = e.toString();
+      if (msg.contains('SocketException') || msg.contains('Connection')) {
+        return ApiResponse.error(
+          'Cannot connect to server. Check your internet connection.',
+        );
+      }
+      if (msg.contains('TimeoutException')) {
+        return ApiResponse.error('Connection timed out. Please try again.');
+      }
+      return ApiResponse.error('Something went wrong. Please try again.');
     }
   }
 

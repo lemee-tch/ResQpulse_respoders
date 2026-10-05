@@ -1,16 +1,56 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'api_service.dart';
 
 const Color _navy = Color(0xFF0D1B4C);
 const Color _green = Color(0xFF2E9E4F);
+const Color _ink = Color(0xFF1A1A2E);
+
+/// One casualty row of the MDRRMC Incident Report (Dead / Injured / Missing).
+class _Casualty {
+  final name = TextEditingController();
+  final age = TextEditingController();
+  final address = TextEditingController();
+  final cause = TextEditingController();
+  final remarks = TextEditingController();
+  String? sex;
+
+  void dispose() {
+    name.dispose();
+    age.dispose();
+    address.dispose();
+    cause.dispose();
+    remarks.dispose();
+  }
+
+  Map<String, String> toJson() => {
+    'name': name.text.trim(),
+    'age': age.text.trim(),
+    'sex': sex ?? '',
+    'address': address.text.trim(),
+    'cause': cause.text.trim(),
+    'remarks': remarks.text.trim(),
+  };
+
+  bool get isEmpty =>
+      name.text.trim().isEmpty &&
+      age.text.trim().isEmpty &&
+      address.text.trim().isEmpty &&
+      cause.text.trim().isEmpty &&
+      remarks.text.trim().isEmpty;
+}
 
 /// Shown after a responder taps "Mark as Resolved" on the Navigation
-/// screen (i.e. after they've accepted a mission and arrived on scene).
-/// Collects optional closing notes + an optional photo, then submits to
-/// POST /api/responder/incidents/{id}/resolve (see
-/// Api\IncidentController::resolve()).
+/// screen. The responder fills in the MDRRMC Incident Report (same format
+/// as the official paper form); the server turns it into a PDF that is
+/// attached to the resolution and shown to the admin on the incident's
+/// detail page. Submits to POST /api/responder/incidents/{id}/resolve
+/// (see Api\IncidentController::resolve()).
+///
+/// Incident type, location, date, day and time are filled in by the server
+/// from the incident itself, so the responder doesn't retype them.
 class IncidentResolutionScreen extends StatefulWidget {
   final int? incidentId;
   final String? incidentLabel;
@@ -27,69 +67,79 @@ class IncidentResolutionScreen extends StatefulWidget {
 }
 
 class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
-  static const int _maxNotesLength = 500;
+  static const int _maxNarrative = 2000;
 
-  final _notesController = TextEditingController();
+  String _reportType = 'final'; // initial | progress | final
+  final _progressNo = TextEditingController();
+  final _narrative = TextEditingController();
+  final _effects = TextEditingController();
+  final _actions = TextEditingController();
+  final _releasedBy = TextEditingController();
+
+  final List<_Casualty> _dead = [];
+  final List<_Casualty> _injured = [];
+  final List<_Casualty> _missing = [];
+
   File? _photo;
   bool _isSubmitting = false;
 
   @override
   void initState() {
     super.initState();
-    _notesController.addListener(() => setState(() {}));
+    _narrative.addListener(() => setState(() {}));
+    _prefillReleasedBy();
+  }
+
+  /// "Report Released by" = who is filing it — pre-filled from the logged-in
+  /// responder's profile, still editable.
+  Future<void> _prefillReleasedBy() async {
+    final r = await ApiService.getResponder();
+    if (r == null || !mounted) return;
+    final parts = <String>[
+      (r['full_name'] ?? '').toString().toUpperCase(),
+      (r['unit_station'] ?? '').toString(),
+      (r['agency'] ?? '').toString(),
+    ].where((p) => p.trim().isNotEmpty).toList();
+    if (_releasedBy.text.isEmpty) {
+      _releasedBy.text = parts.join(', ');
+    }
   }
 
   @override
   void dispose() {
-    _notesController.dispose();
+    _progressNo.dispose();
+    _narrative.dispose();
+    _effects.dispose();
+    _actions.dispose();
+    _releasedBy.dispose();
+    for (final c in [..._dead, ..._injured, ..._missing]) {
+      c.dispose();
+    }
     super.dispose();
   }
 
-  Future<void> _pickImageFromCamera() async {
+  // ── Photo ────────────────────────────────────────────────────────
+
+  Future<void> _pickImage(ImageSource source) async {
     try {
-      final picker = ImagePicker();
-      final picked = await picker.pickImage(
-        source: ImageSource.camera,
+      final picked = await ImagePicker().pickImage(
+        source: source,
         imageQuality: 80,
       );
-      if (picked != null) {
-        setState(() => _photo = File(picked.path));
-      }
+      if (picked != null) setState(() => _photo = File(picked.path));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Could not open camera: $e'),
+          content: Text(
+            'Could not open ${source == ImageSource.camera ? 'camera' : 'gallery'}: $e',
+          ),
           backgroundColor: Colors.redAccent,
         ),
       );
     }
   }
 
-  Future<void> _pickImageFromGallery() async {
-    try {
-      final picker = ImagePicker();
-      final picked = await picker.pickImage(
-        source: ImageSource.gallery,
-        imageQuality: 80,
-      );
-      if (picked != null) {
-        setState(() => _photo = File(picked.path));
-      }
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Could not open gallery: $e'),
-          backgroundColor: Colors.redAccent,
-        ),
-      );
-    }
-  }
-
-  /// Lets the responder pick where the photo comes from, same
-  /// take-a-photo / choose-from-gallery pattern used on the citizen
-  /// Report Incident screen, instead of jumping straight to the camera.
   void _showImageSourceSheet() {
     showModalBottomSheet(
       context: context,
@@ -108,46 +158,26 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
                 style: TextStyle(
                   fontWeight: FontWeight.bold,
                   fontSize: 16,
-                  color: Color(0xFF1A1A2E),
+                  color: _ink,
                 ),
               ),
               const SizedBox(height: 16),
-              ListTile(
-                leading: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: _navy.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: const Icon(Icons.camera_alt_outlined, color: _navy),
-                ),
-                title: const Text(
-                  'Take a Photo',
-                  style: TextStyle(fontWeight: FontWeight.w600),
-                ),
-                subtitle: const Text('Open camera'),
-                onTap: () {
+              _sheetTile(
+                Icons.camera_alt_outlined,
+                'Take a Photo',
+                'Open camera',
+                () {
                   Navigator.pop(ctx);
-                  _pickImageFromCamera();
+                  _pickImage(ImageSource.camera);
                 },
               ),
-              ListTile(
-                leading: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: _navy.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: const Icon(Icons.photo_library_outlined, color: _navy),
-                ),
-                title: const Text(
-                  'Choose from Gallery',
-                  style: TextStyle(fontWeight: FontWeight.w600),
-                ),
-                subtitle: const Text('Pick from your photos'),
-                onTap: () {
+              _sheetTile(
+                Icons.photo_library_outlined,
+                'Choose from Gallery',
+                'Pick from your photos',
+                () {
                   Navigator.pop(ctx);
-                  _pickImageFromGallery();
+                  _pickImage(ImageSource.gallery);
                 },
               ),
             ],
@@ -157,12 +187,54 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
     );
   }
 
-  void _removePhoto() => setState(() => _photo = null);
+  Widget _sheetTile(
+    IconData icon,
+    String title,
+    String subtitle,
+    VoidCallback onTap,
+  ) {
+    return ListTile(
+      leading: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: _navy.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Icon(icon, color: _navy),
+      ),
+      title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
+      subtitle: Text(subtitle),
+      onTap: onTap,
+    );
+  }
 
-  /// Calls the real resolve endpoint. `widget.incidentId` can legitimately
-  /// be null (see NavigationScreen — it's optional there too), in which
-  /// case there's nothing to submit to; the screen still lets the
-  /// responder close out locally rather than getting stuck.
+  // ── Submit ───────────────────────────────────────────────────────
+
+  void _snack(String msg, {Color color = Colors.redAccent}) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(msg), backgroundColor: color));
+  }
+
+  Map<String, dynamic> _buildReport() {
+    List<Map<String, String>> rows(List<_Casualty> l) =>
+        l.where((c) => !c.isEmpty).map((c) => c.toJson()).toList();
+
+    return {
+      'report_type': _reportType,
+      'progress_no': _progressNo.text.trim(),
+      'narrative': _narrative.text.trim(),
+      'casualties': {
+        'dead': rows(_dead),
+        'injured': rows(_injured),
+        'missing': rows(_missing),
+      },
+      'effects': _effects.text.trim(),
+      'actions_taken': _actions.text.trim(),
+      'released_by': _releasedBy.text.trim(),
+    };
+  }
+
   Future<void> _submit() async {
     final incidentId = widget.incidentId;
 
@@ -171,45 +243,253 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
       return;
     }
 
-    setState(() {
-      _isSubmitting = true;
-    });
+    if (_narrative.text.trim().isEmpty) {
+      _snack('Please describe what happened in the narrative.');
+      return;
+    }
+    if (_reportType == 'progress' && _progressNo.text.trim().isEmpty) {
+      _snack('Enter the progress report number.');
+      return;
+    }
+
+    setState(() => _isSubmitting = true);
 
     final result = await ApiService.resolveIncident(
       incidentId,
-      notes: _notesController.text.trim().isEmpty
-          ? null
-          : _notesController.text.trim(),
       photo: _photo,
+      report: _buildReport(),
     );
 
     if (!mounted) return;
     setState(() => _isSubmitting = false);
 
     if (!result.success) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(result.error ?? 'Could not mark this resolved.'),
-          backgroundColor: Colors.redAccent,
-        ),
-      );
+      _snack(result.error ?? 'Could not submit the report.');
       return;
     }
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Incident marked as resolved.'),
-        backgroundColor: _green,
-      ),
-    );
+    _snack('Incident resolved. Report filed.', color: _green);
 
     // Pop everything back to Home (past Navigation + Incident Detail).
     Navigator.of(context).popUntil((route) => route.isFirst);
   }
 
+  // ── UI helpers ───────────────────────────────────────────────────
+
+  InputDecoration _decoration(String hint) => InputDecoration(
+    hintText: hint,
+    hintStyle: TextStyle(color: Colors.grey[400], fontSize: 14),
+    filled: true,
+    fillColor: Colors.white,
+    isDense: true,
+    contentPadding: const EdgeInsets.all(12),
+    border: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(10),
+      borderSide: BorderSide(color: Colors.grey[300]!),
+    ),
+    enabledBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(10),
+      borderSide: BorderSide(color: Colors.grey[300]!),
+    ),
+    focusedBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(10),
+      borderSide: const BorderSide(color: _navy, width: 1.6),
+    ),
+  );
+
+  Widget _label(String text, {String? hint}) => Padding(
+    padding: const EdgeInsets.only(bottom: 8),
+    child: Row(
+      children: [
+        Flexible(
+          child: Text(
+            text,
+            style: const TextStyle(
+              fontSize: 14.5,
+              fontWeight: FontWeight.bold,
+              color: _ink,
+            ),
+          ),
+        ),
+        if (hint != null) ...[
+          const SizedBox(width: 6),
+          Text(hint, style: TextStyle(fontSize: 12.5, color: Colors.grey[500])),
+        ],
+      ],
+    ),
+  );
+
+  Widget _textBox(
+    TextEditingController c,
+    String hint, {
+    int lines = 3,
+    int max = 1000,
+  }) {
+    return TextField(
+      controller: c,
+      maxLines: lines,
+      maxLength: max,
+      textCapitalization: TextCapitalization.sentences,
+      buildCounter:
+          (context, {required currentLength, required isFocused, maxLength}) =>
+              null,
+      style: const TextStyle(fontSize: 14, color: _ink),
+      decoration: _decoration(hint),
+    );
+  }
+
+  Widget _typeChip(String value, String label) {
+    final selected = _reportType == value;
+    return ChoiceChip(
+      label: Text(label),
+      selected: selected,
+      showCheckmark: false,
+      selectedColor: _navy,
+      backgroundColor: Colors.white,
+      side: BorderSide(color: selected ? _navy : Colors.grey[300]!),
+      labelStyle: TextStyle(
+        color: selected ? Colors.white : _ink,
+        fontWeight: FontWeight.w600,
+        fontSize: 13,
+      ),
+      onSelected: (_) => setState(() => _reportType = value),
+    );
+  }
+
+  Widget _casualtySection(String title, List<_Casualty> list) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF7F8FB),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey[300]!),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  title,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                    color: _ink,
+                  ),
+                ),
+              ),
+              TextButton.icon(
+                onPressed: () => setState(() => list.add(_Casualty())),
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('Add'),
+                style: TextButton.styleFrom(foregroundColor: _navy),
+              ),
+            ],
+          ),
+          if (list.isEmpty)
+            Text(
+              'None',
+              style: TextStyle(fontSize: 13, color: Colors.grey[500]),
+            ),
+          for (int i = 0; i < list.length; i++) _casualtyCard(list, i),
+        ],
+      ),
+    );
+  }
+
+  Widget _casualtyCard(List<_Casualty> list, int i) {
+    final c = list[i];
+    Widget small(TextEditingController ctl, String hint, {TextInputType? kb}) =>
+        TextField(
+          controller: ctl,
+          keyboardType: kb,
+          style: const TextStyle(fontSize: 13.5, color: _ink),
+          decoration: _decoration(hint),
+        );
+
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.grey[300]!),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Text(
+                '#${i + 1}',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.grey[600],
+                ),
+              ),
+              const Spacer(),
+              InkWell(
+                onTap: () => setState(() {
+                  list.removeAt(i).dispose();
+                }),
+                child: const Padding(
+                  padding: EdgeInsets.all(4),
+                  child: Icon(
+                    Icons.delete_outline,
+                    size: 20,
+                    color: Colors.redAccent,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          small(c.name, 'Full name'),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: c.age,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    LengthLimitingTextInputFormatter(3),
+                  ],
+                  style: const TextStyle(fontSize: 13.5, color: _ink),
+                  decoration: _decoration('Age'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: DropdownButtonFormField<String>(
+                  value: c.sex,
+                  isDense: true,
+                  decoration: _decoration('Sex'),
+                  items: const [
+                    DropdownMenuItem(value: 'M', child: Text('M')),
+                    DropdownMenuItem(value: 'F', child: Text('F')),
+                  ],
+                  onChanged: (v) => setState(() => c.sex = v),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          small(c.address, 'Address'),
+          const SizedBox(height: 8),
+          small(c.cause, 'Cause (e.g. side sweep, drowning)'),
+          const SizedBox(height: 8),
+          small(c.remarks, 'Remarks (disposition of casualty)'),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final notesLength = _notesController.text.length;
+    final narrativeLength = _narrative.text.length;
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -217,13 +497,13 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
         backgroundColor: Colors.white,
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Color(0xFF1A1A2E)),
+          icon: const Icon(Icons.arrow_back, color: _ink),
           onPressed: () => Navigator.pop(context),
         ),
         title: const Text(
-          'Incidents Resolution',
+          'Incident Report',
           style: TextStyle(
-            color: Color(0xFF1A1A2E),
+            color: _ink,
             fontWeight: FontWeight.bold,
             fontSize: 18,
           ),
@@ -232,19 +512,18 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
       ),
       body: SafeArea(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
+          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+          padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const SizedBox(height: 8),
-
-              // ── Success icon + heading ──
+              // ── Heading ──
               Center(
                 child: Column(
                   children: [
                     Container(
-                      width: 92,
-                      height: 92,
+                      width: 68,
+                      height: 68,
                       decoration: const BoxDecoration(
                         color: _green,
                         shape: BoxShape.circle,
@@ -252,22 +531,23 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
                       child: const Icon(
                         Icons.check,
                         color: Colors.white,
-                        size: 48,
+                        size: 38,
                       ),
                     ),
-                    const SizedBox(height: 18),
+                    const SizedBox(height: 12),
                     const Text(
-                      'Incidents Resolved',
+                      'MDRRMC Incident Report',
                       style: TextStyle(
-                        fontSize: 19,
+                        fontSize: 18,
                         fontWeight: FontWeight.bold,
-                        color: Color(0xFF1A1A2E),
+                        color: _ink,
                       ),
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      'Great job! Thank you.',
-                      style: TextStyle(fontSize: 13.5, color: Colors.grey[600]),
+                      'Fill this in to close the incident. A PDF copy is sent to the MDRRMO admin.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 13, color: Colors.grey[600]),
                     ),
                     if (widget.incidentLabel != null) ...[
                       const SizedBox(height: 6),
@@ -285,64 +565,93 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
                 ),
               ),
 
-              const SizedBox(height: 32),
+              const SizedBox(height: 24),
 
-              // ── Notes ──
-              const Text(
-                'Notes',
-                style: TextStyle(
-                  fontSize: 14.5,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF1A1A2E),
-                ),
+              // ── Report type ──
+              _label('Report Type'),
+              Wrap(
+                spacing: 8,
+                children: [
+                  _typeChip('initial', 'Initial'),
+                  _typeChip('progress', 'Progress'),
+                  _typeChip('final', 'Final'),
+                ],
               ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: _notesController,
-                maxLength: _maxNotesLength,
-                maxLines: 5,
-                buildCounter:
-                    (
-                      context, {
-                      required currentLength,
-                      required isFocused,
-                      maxLength,
-                    }) => null,
-                style: const TextStyle(fontSize: 14, color: Color(0xFF1A1A2E)),
-                decoration: InputDecoration(
-                  hintText: 'Enter notes about the incident...',
-                  hintStyle: TextStyle(color: Colors.grey[400], fontSize: 14),
-                  filled: true,
-                  fillColor: Colors.white,
-                  contentPadding: const EdgeInsets.all(14),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.grey[300]!),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.grey[300]!),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: _navy, width: 1.6),
-                  ),
+              if (_reportType == 'progress') ...[
+                const SizedBox(height: 10),
+                TextField(
+                  controller: _progressNo,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    LengthLimitingTextInputFormatter(3),
+                  ],
+                  decoration: _decoration('Progress Report No.'),
                 ),
+              ],
+
+              const SizedBox(height: 20),
+
+              // ── Narrative ──
+              _label('Details / Narrative / Cause', hint: '(required)'),
+              _textBox(
+                _narrative,
+                'What happened, who responded, and when (e.g. times dispatched / arrived)...',
+                lines: 6,
+                max: _maxNarrative,
               ),
               Align(
                 alignment: Alignment.centerRight,
                 child: Padding(
                   padding: const EdgeInsets.only(top: 4),
                   child: Text(
-                    '$notesLength/$_maxNotesLength',
+                    '$narrativeLength/$_maxNarrative',
                     style: TextStyle(fontSize: 11.5, color: Colors.grey[500]),
                   ),
                 ),
               ),
 
+              const SizedBox(height: 16),
+
+              // ── Casualties ──
+              _label('Casualties', hint: '(leave empty if none)'),
+              _casualtySection('A. Dead / Drowned', _dead),
+              _casualtySection('B. Injured', _injured),
+              _casualtySection('C. Missing', _missing),
+
+              const SizedBox(height: 8),
+
+              // ── Effects / Actions ──
+              _label('Effects', hint: '(optional)'),
+              _textBox(
+                _effects,
+                'e.g. Minor abrasion, road blocked...',
+                lines: 3,
+              ),
+
+              const SizedBox(height: 16),
+
+              _label("Action/s Taken", hint: '(optional)'),
+              _textBox(
+                _actions,
+                'What the team did on scene...',
+                lines: 4,
+                max: 1500,
+              ),
+
+              const SizedBox(height: 16),
+
+              _label('Report Released by'),
+              TextField(
+                controller: _releasedBy,
+                textCapitalization: TextCapitalization.words,
+                style: const TextStyle(fontSize: 14, color: _ink),
+                decoration: _decoration('Name, designation, office/agency'),
+              ),
+
               const SizedBox(height: 20),
 
-              // ── Upload photo ──
+              // ── Photo ──
               Row(
                 children: [
                   const Text(
@@ -350,11 +659,11 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
                     style: TextStyle(
                       fontSize: 14.5,
                       fontWeight: FontWeight.bold,
-                      color: Color(0xFF1A1A2E),
+                      color: _ink,
                     ),
                   ),
                   Text(
-                    '(Optional)',
+                    '(Optional – added to the PDF)',
                     style: TextStyle(fontSize: 13, color: Colors.grey[500]),
                   ),
                 ],
@@ -401,7 +710,7 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
                               top: 6,
                               right: 6,
                               child: GestureDetector(
-                                onTap: _removePhoto,
+                                onTap: () => setState(() => _photo = null),
                                 child: Container(
                                   padding: const EdgeInsets.all(4),
                                   decoration: const BoxDecoration(
@@ -421,7 +730,7 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
                 ),
               ),
 
-              const SizedBox(height: 36),
+              const SizedBox(height: 32),
 
               // ── Submit ──
               SizedBox(

@@ -149,6 +149,22 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
     return indexed.map((e) => e.value).toList();
   }
 
+  /// "Active Incidents" list — [_activeIncidents] minus any mission THIS
+  /// responder has already accepted (or joined as backup on). Once you
+  /// accept, the incident moves to "Accepted Missions" instead of also
+  /// sitting in this to-do list. [_activeIncidents] itself stays
+  /// unfiltered because "Incident Locations" should keep every pin on
+  /// the map, accepted or not.
+  List<dynamic> get _activeIncidentsNotAccepted {
+    final myId = _responder?['id'];
+    if (myId == null) return _activeIncidents;
+
+    return _activeIncidents.where((i) {
+      final responders = (i['responders'] as List<dynamic>?) ?? const [];
+      return !responders.any((r) => r is Map && r['id'] == myId);
+    }).toList();
+  }
+
   List<dynamic> get _criticalIncidents => _incidents
       .where((i) => i['priority'] == 'critical' && i['status'] != 'resolved')
       .toList();
@@ -328,15 +344,17 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
                                 icon: Icons.assignment_late_outlined,
                                 iconColor: const Color(0xFFD32F2F),
                                 bgColor: const Color(0xFFFFEBEE),
-                                badgeCount: _activeIncidents.length,
+                                badgeCount: _activeIncidentsNotAccepted.length,
                                 onTap: () => Navigator.push(
                                   context,
                                   MaterialPageRoute(
                                     builder: (_) => _IncidentListScreen(
                                       title: 'Active Incidents',
                                       subtitle:
-                                          'Everything currently assigned to your agency.',
-                                      incidents: _activeIncidents,
+                                          'Assigned to your agency and not yet accepted by you.',
+                                      incidents: _activeIncidentsNotAccepted,
+                                      incidentsGetter: () =>
+                                          _activeIncidentsNotAccepted,
                                       isLoading: _incidentsLoading,
                                       errorMessage: _incidentsError,
                                       onRetry: _loadIncidents,
@@ -1385,7 +1403,7 @@ class _CriticalAlertCard extends StatelessWidget {
 // Generic incident-list screen — reused for Active Incidents & Critical
 // ══════════════════════════════════════════════════════════════════
 
-class _IncidentListScreen extends StatelessWidget {
+class _IncidentListScreen extends StatefulWidget {
   final String title;
   final String subtitle;
   final List<dynamic> incidents;
@@ -1394,6 +1412,13 @@ class _IncidentListScreen extends StatelessWidget {
   final Future<void> Function() onRetry;
   final IconData emptyIcon;
   final String emptyMessage;
+
+  /// Optional: re-reads the up-to-date list from the parent after
+  /// [onRetry] has refreshed it. Without this the screen only ever shows
+  /// the snapshot it was opened with, so e.g. a mission you just accepted
+  /// would keep sitting in "Active Incidents" until you backed out and
+  /// reopened it.
+  final List<dynamic> Function()? incidentsGetter;
 
   const _IncidentListScreen({
     required this.title,
@@ -1404,7 +1429,22 @@ class _IncidentListScreen extends StatelessWidget {
     required this.onRetry,
     required this.emptyIcon,
     required this.emptyMessage,
+    this.incidentsGetter,
   });
+
+  @override
+  State<_IncidentListScreen> createState() => _IncidentListScreenState();
+}
+
+class _IncidentListScreenState extends State<_IncidentListScreen> {
+  late List<dynamic> _items = widget.incidents;
+
+  Future<void> _refresh() async {
+    await widget.onRetry();
+    if (!mounted) return;
+    final getter = widget.incidentsGetter;
+    if (getter != null) setState(() => _items = getter());
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1422,7 +1462,7 @@ class _IncidentListScreen extends StatelessWidget {
           onPressed: () => Navigator.pop(context),
         ),
         title: Text(
-          title,
+          widget.title,
           style: const TextStyle(
             color: Color(0xFF1A1A2E),
             fontWeight: FontWeight.bold,
@@ -1432,39 +1472,48 @@ class _IncidentListScreen extends StatelessWidget {
         centerTitle: true,
       ),
       body: RefreshIndicator(
-        onRefresh: onRetry,
+        onRefresh: _refresh,
         color: _gradientTop,
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
           children: [
             Text(
-              subtitle,
+              widget.subtitle,
               style: TextStyle(fontSize: 12.5, color: Colors.grey[600]),
             ),
             const SizedBox(height: 14),
-            if (isLoading)
+            if (widget.isLoading)
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 40),
                 child: Center(child: CircularProgressIndicator()),
               )
-            else if (errorMessage != null)
-              _EmptyStateCard(icon: Icons.error_outline, message: errorMessage!)
-            else if (incidents.isEmpty)
-              _EmptyStateCard(icon: emptyIcon, message: emptyMessage)
+            else if (widget.errorMessage != null)
+              _EmptyStateCard(
+                icon: Icons.error_outline,
+                message: widget.errorMessage!,
+              )
+            else if (_items.isEmpty)
+              _EmptyStateCard(
+                icon: widget.emptyIcon,
+                message: widget.emptyMessage,
+              )
             else
-              ...incidents.map(
+              ..._items.map(
                 (incident) => Padding(
                   padding: const EdgeInsets.only(bottom: 10),
                   child: _IncidentRowCard(
                     incident: incident,
+                    // Refresh on the way back — the detail screen is where
+                    // a mission gets accepted, so the list must re-read
+                    // the parent's data to drop it.
                     onTap: () => Navigator.push(
                       context,
                       MaterialPageRoute(
                         builder: (_) =>
                             _IncidentDetailScreen(incident: incident),
                       ),
-                    ),
+                    ).then((_) => _refresh()),
                   ),
                 ),
               ),
