@@ -5,22 +5,20 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
-import 'package:url_launcher/url_launcher.dart';
 import 'incident_resolution.dart';
 
 const Color _navy = Color(0xFF0D1B4C);
 const Color _green = Color(0xFF2E9E3F);
 
-/// Pre-navigation preview screen shown right after a responder accepts a
-/// mission — matches the "Navigation" screenshot: a turn-instruction
-/// banner, a route map (green = current position, red = destination),
-/// and a bottom card with distance / ETA / estimated arrival plus a
-/// "Start Navigation" button that hands off to the device's Maps app
-/// for live turn-by-turn guidance.
+/// Navigation preview screen shown right after a responder accepts a
+/// mission: a turn-instruction banner, a route map (green = current
+/// position, red = destination), and a bottom card with distance / ETA /
+/// estimated arrival. Everything stays inside the app — there is no hand-off
+/// to Google Maps or any other external maps app.
 ///
 /// Also offers "Mark as Resolved" once the responder is done on scene —
-/// opens IncidentResolutionScreen to collect closing notes + an optional
-/// photo, then submits to POST /api/responder/incidents/{id}/resolve
+/// opens IncidentResolutionScreen (the MDRRMC incident report form), which
+/// submits to POST /api/responder/incidents/{id}/resolve
 /// (see Api\IncidentController::resolve()). [incidentId] is passed
 /// through so that call knows which incident to close out.
 ///
@@ -311,50 +309,9 @@ class _NavigationScreenState extends State<NavigationScreen> {
     return '$hour12:$minute $period';
   }
 
-  /// Hands off to the device's Maps app for live turn-by-turn guidance —
-  /// same "launch an external app via url_launcher" pattern already used
-  /// for phone calls elsewhere in this app (sos.dart, hotlines.dart).
-  Future<void> _startNavigation() async {
-    final lat = widget.destinationLat;
-    final lng = widget.destinationLng;
-
-    // Android: opens Google Maps directly in turn-by-turn driving mode.
-    final androidNavUri = Uri.parse('google.navigation:q=$lat,$lng&mode=d');
-    // Universal fallback (iOS / no Maps app / web): Google Maps directions.
-    final webNavUri = Uri.parse(
-      'https://www.google.com/maps/dir/?api=1&destination=$lat,$lng&travelmode=driving',
-    );
-
-    try {
-      if (await canLaunchUrl(androidNavUri)) {
-        await launchUrl(androidNavUri);
-        return;
-      }
-      if (await canLaunchUrl(webNavUri)) {
-        await launchUrl(webNavUri, mode: LaunchMode.externalApplication);
-        return;
-      }
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('No maps app available on this device.'),
-          backgroundColor: Colors.redAccent,
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Could not start navigation: $e'),
-          backgroundColor: Colors.redAccent,
-        ),
-      );
-    }
-  }
-
-  /// Opens the closing-notes / optional-photo screen. Reachable any time
-  /// once a route has resolved — a responder may mark resolved without
-  /// ever tapping "Start Navigation" (e.g. they drove there manually).
+  /// Opens the incident report form. Reachable any time — a responder
+  /// may mark resolved whenever they're done on scene, regardless of how
+  /// they got there.
   void _handleMarkResolved() {
     Navigator.push(
       context,
@@ -640,30 +597,6 @@ class _NavigationScreenState extends State<NavigationScreen> {
                             ),
                           ),
                           const SizedBox(height: 20),
-                          SizedBox(
-                            width: double.infinity,
-                            height: 52,
-                            child: ElevatedButton(
-                              onPressed: (_isLoading || _distanceKm == null)
-                                  ? null
-                                  : _startNavigation,
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: _navy,
-                                foregroundColor: Colors.white,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(28),
-                                ),
-                              ),
-                              child: const Text(
-                                'START NAVIGATION',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  letterSpacing: 0.5,
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 10),
                           SizedBox(
                             width: double.infinity,
                             height: 52,

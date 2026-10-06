@@ -69,8 +69,7 @@ class IncidentResolutionScreen extends StatefulWidget {
 class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
   static const int _maxNarrative = 2000;
 
-  String _reportType = 'final'; // initial | progress | final
-  final _progressNo = TextEditingController();
+  String _reportType = 'final'; // initial | final
   final _narrative = TextEditingController();
   final _effects = TextEditingController();
   final _actions = TextEditingController();
@@ -107,7 +106,6 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
 
   @override
   void dispose() {
-    _progressNo.dispose();
     _narrative.dispose();
     _effects.dispose();
     _actions.dispose();
@@ -222,7 +220,6 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
 
     return {
       'report_type': _reportType,
-      'progress_no': _progressNo.text.trim(),
       'narrative': _narrative.text.trim(),
       'casualties': {
         'dead': rows(_dead),
@@ -245,10 +242,6 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
 
     if (_narrative.text.trim().isEmpty) {
       _snack('Please describe what happened in the narrative.');
-      return;
-    }
-    if (_reportType == 'progress' && _progressNo.text.trim().isEmpty) {
-      _snack('Enter the progress report number.');
       return;
     }
 
@@ -573,22 +566,9 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
                 spacing: 8,
                 children: [
                   _typeChip('initial', 'Initial'),
-                  _typeChip('progress', 'Progress'),
                   _typeChip('final', 'Final'),
                 ],
               ),
-              if (_reportType == 'progress') ...[
-                const SizedBox(height: 10),
-                TextField(
-                  controller: _progressNo,
-                  keyboardType: TextInputType.number,
-                  inputFormatters: [
-                    FilteringTextInputFormatter.digitsOnly,
-                    LengthLimitingTextInputFormatter(3),
-                  ],
-                  decoration: _decoration('Progress Report No.'),
-                ),
-              ],
 
               const SizedBox(height: 20),
 
