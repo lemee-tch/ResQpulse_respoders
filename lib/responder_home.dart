@@ -124,6 +124,13 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
     'low': 3,
   };
 
+  /// Resolved, or the team's Final report is with MDRRMO for review —
+  /// either way there's nothing left to do on it (it's in Report History).
+  /// The server already leaves both out of the list; this keeps a stale
+  /// copy from showing them.
+  static bool _isDone(dynamic i) =>
+      i['status'] == 'resolved' || i['status'] == 'for_review';
+
   /// Everything currently assigned to this responder's agency that
   /// hasn't been resolved yet. This now powers BOTH "Active Incidents"
   /// AND "Incident Locations" — SOS Emergency reports are included here,
@@ -136,7 +143,7 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
   /// API (most-recent-first) — done via an index-based sort since Dart's
   /// List.sort isn't guaranteed stable.
   List<dynamic> get _activeIncidents {
-    final list = _incidents.where((i) => i['status'] != 'resolved').toList();
+    final list = _incidents.where((i) => !_isDone(i)).toList();
 
     final indexed = list.asMap().entries.toList()
       ..sort((a, b) {
@@ -166,7 +173,7 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
   }
 
   List<dynamic> get _criticalIncidents => _incidents
-      .where((i) => i['priority'] == 'critical' && i['status'] != 'resolved')
+      .where((i) => i['priority'] == 'critical' && !_isDone(i))
       .toList();
 
   /// Missions THIS responder has personally accepted (or joined as
@@ -178,7 +185,7 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
     if (myId == null) return const [];
 
     return _incidents.where((i) {
-      if (i['status'] == 'resolved') return false;
+      if (_isDone(i)) return false;
       final responders = (i['responders'] as List<dynamic>?) ?? const [];
       return responders.any((r) => r is Map && r['id'] == myId);
     }).toList();
@@ -1116,11 +1123,14 @@ const Map<String, Color> _statusColors = {
   'pending': Color(0xFFF59E0B),
   'responding': Color(0xFF3B82F6),
   'acknowledged': Color(0xFF3B82F6),
+  'for_review': Color(0xFF7C3AED),
   'resolved': Color(0xFF10B981),
 };
 
 String _statusLabel(String? status) {
   if (status == null || status.isEmpty) return 'Pending';
+  // The team's Final report is with MDRRMO, who then marks it resolved.
+  if (status == 'for_review') return 'Under Review';
   return status[0].toUpperCase() + status.substring(1);
 }
 
@@ -1741,15 +1751,17 @@ class _ReportHistoryScreenState extends State<_ReportHistoryScreen> {
   Widget build(BuildContext context) {
     return _IncidentListScreen(
       title: 'Report History',
-      subtitle: 'Resolved incidents you personally responded to.',
+      subtitle:
+          'Incidents you responded to — resolved, or with MDRRMO for '
+          'review.',
       incidents: _incidents,
       isLoading: _isLoading,
       errorMessage: _errorMessage,
       onRetry: _load,
       emptyIcon: Icons.fact_check_outlined,
       emptyMessage:
-          'No resolved reports yet. Incidents you\'ve responded to and '
-          'resolved will be logged here.',
+          'No reports yet. Incidents you\'ve responded to show up here once '
+          'you submit the Final report.',
     );
   }
 }
@@ -2251,6 +2263,18 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
   /// incident_detail.dart screen already uses (`_isResolved`).
   bool get _isResolved => incident['status'] == 'resolved';
 
+  /// The team's Final report is with MDRRMO (Incidents → For Review). It
+  /// can't be changed unless MDRRMO sends it back.
+  bool get _isUnderReview => incident['status'] == 'for_review';
+
+  /// What MDRRMO asked the team to fix, while a report it sent back is
+  /// waiting to be sent again (the report is Initial again by then).
+  String? get _returnReason {
+    final reason = (incident['report_return_reason'] ?? '').toString().trim();
+    if (reason.isEmpty || incident['status'] != 'responding') return null;
+    return _hasInitialReport ? reason : null;
+  }
+
   /// An Initial MDRRMC Incident Report was filed. It can be updated —
   /// and the incident stays open — until it's submitted as Final (see
   /// IncidentResolutionScreen / Api\IncidentController::resolve()).
@@ -2309,6 +2333,51 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
             borderRadius: BorderRadius.circular(30),
           ),
         ),
+      ),
+    );
+  }
+
+  /// Orange note under the report button when MDRRMO sent it back.
+  Widget _returnedNote(String reason) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF3E0),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFFB8C00)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(
+            Icons.assignment_return_outlined,
+            color: Color(0xFFE65100),
+            size: 20,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text.rich(
+              TextSpan(
+                children: [
+                  const TextSpan(
+                    text: 'MDRRMO sent your report back: ',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  TextSpan(text: reason),
+                  const TextSpan(
+                    text: '\nUpdate it, then submit it as Final again.',
+                  ),
+                ],
+              ),
+              style: const TextStyle(
+                fontSize: 12.5,
+                color: Color(0xFF5D4037),
+                height: 1.35,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -2935,6 +3004,71 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
                     const SizedBox(height: 12),
                     _reportButton(),
                   ],
+                ] else if (_isUnderReview) ...[
+                  // Final report sent — MDRRMO checks it, then marks the
+                  // incident resolved or sends the report back.
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 14,
+                      horizontal: 16,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF3E8FF),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Row(
+                      children: const [
+                        Icon(
+                          Icons.hourglass_top_rounded,
+                          color: Color(0xFF6D28D9),
+                          size: 20,
+                        ),
+                        SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            'Final report sent. MDRRMO is reviewing it '
+                            'before the incident is marked resolved.',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF5B21B6),
+                              height: 1.35,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (_iHaveJoined) ...[
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 52,
+                      child: OutlinedButton.icon(
+                        onPressed: _openReport,
+                        icon: const Icon(Icons.description_outlined, size: 20),
+                        label: const Text(
+                          'VIEW REPORT',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 0.6,
+                          ),
+                        ),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: const Color(0xFF6D28D9),
+                          side: const BorderSide(
+                            color: Color(0xFF6D28D9),
+                            width: 1.5,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(30),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ] else if (_isMswd) ...[
                   // MSWD reaches this screen from the Incident
                   // Locations map (kept visible to them for situational
@@ -3020,12 +3154,15 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
                   ),
                   const SizedBox(height: 12),
                   _reportButton(),
-                  if (_hasInitialReport) ...[
+                  if (_returnReason != null) ...[
+                    const SizedBox(height: 12),
+                    _returnedNote(_returnReason!),
+                  ] else if (_hasInitialReport) ...[
                     const SizedBox(height: 12),
                     _initialReportNote(
                       'Initial report filed. Keep it updated as details '
-                      'come in, then submit it as Final to close the '
-                      'incident.',
+                      'come in, then submit it as Final — MDRRMO reviews '
+                      'it, then closes the incident.',
                     ),
                   ],
                 ] else ...[

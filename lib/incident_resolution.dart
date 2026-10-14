@@ -71,8 +71,11 @@ class _Casualty {
 ///   Initial  saved, and the incident stays open. The responder can come
 ///            back and update it as details come in (casualty status,
 ///            actions taken, ...).
-///   Final    saved, and the incident is resolved. After that the report
-///            can't be changed — the app asks for confirmation first.
+///   Final    saved, and sent to MDRRMO for review (Incidents → For
+///            Review). MDRRMO marks the incident resolved, or sends the
+///            report back with what to fix — it then opens here as Initial
+///            again, with MDRRMO's reason on top. While MDRRMO has it, the
+///            report can't be changed — the app asks for confirmation first.
 ///
 /// When the screen opens it loads the report already filed for this
 /// incident (GET /api/responder/incidents/{id}/report), so an Initial
@@ -123,6 +126,13 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
   /// An admin already closed the incident (the report can still be
   /// updated and finalized).
   bool _incidentResolved = false;
+
+  /// The Final report is with MDRRMO for review (status for_review).
+  bool _underReview = false;
+
+  /// MDRRMO sent the Final report back: what to fix, and when.
+  String? _returnedReason;
+  DateTime? _returnedAtUtc;
 
   /// Photo already on the saved report (path on the server's storage).
   String? _savedPhotoPath;
@@ -176,6 +186,14 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
       _isLocked = data['is_final'] == true || data['can_edit'] == false;
       _lockedMessage = data['message']?.toString();
       _incidentResolved = data['incident_status'] == 'resolved';
+      _underReview =
+          data['under_review'] == true ||
+          data['incident_status'] == 'for_review';
+      final returned = (data['returned_reason'] ?? '').toString().trim();
+      _returnedReason = returned.isEmpty ? null : returned;
+      _returnedAtUtc = DateTime.tryParse(
+        (data['returned_at'] ?? '').toString(),
+      )?.toUtc();
       _savedPhotoPath = (data['photo_path'] ?? '').toString().isEmpty
           ? null
           : data['photo_path'].toString();
@@ -380,8 +398,9 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
         content: Text(
           _incidentResolved
               ? 'After this, the report can no longer be changed.'
-              : 'This closes the incident. After this, the report can no '
-                    'longer be changed.',
+              : 'It goes to MDRRMO for review, and they mark the incident '
+                    'resolved. You can\'t change it unless MDRRMO sends it '
+                    'back to you.',
         ),
         actions: [
           TextButton(
@@ -451,7 +470,8 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
       _snack(
         serverMessage.isNotEmpty
             ? serverMessage
-            : 'Final report submitted. The incident is now resolved.',
+            : 'Final report submitted. MDRRMO will review it, then mark '
+                  'the incident resolved.',
         color: _green,
       );
       // Pop everything back to Home (past Navigation + Incident Detail).
@@ -745,12 +765,73 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
             child: Text(
               'You\'re updating the Initial report.$when '
               'Submit it as Final once everything is in'
-              '${_incidentResolved ? '.' : ' — that closes the incident.'}',
+              '${_incidentResolved ? '.' : ' — MDRRMO then reviews it.'}',
               style: const TextStyle(
                 fontSize: 12.5,
                 color: Color(0xFF5D4037),
                 height: 1.4,
               ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Shown at the top when MDRRMO sent the Final report back.
+  Widget _returnedBanner() {
+    final String when = _returnedAtUtc != null
+        ? ' (${_formatManila(_returnedAtUtc!)})'
+        : '';
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF3E0),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFFB8C00)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(
+            Icons.assignment_return_outlined,
+            color: Color(0xFFE65100),
+            size: 22,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'MDRRMO sent your report back$when',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFFBF360C),
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  _returnedReason!,
+                  style: const TextStyle(
+                    fontSize: 12.5,
+                    color: Color(0xFF5D4037),
+                    height: 1.4,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                const Text(
+                  'Fix it, then submit it as Final again.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF5D4037),
+                  ),
+                ),
+              ],
             ),
           ),
         ],
@@ -922,9 +1003,13 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
       );
     } else if (_isLocked) {
       body = _statusView(
-        icon: Icons.verified_outlined,
-        color: _green,
-        title: _hasSavedReport ? 'Final report submitted' : 'Incident closed',
+        icon: _underReview
+            ? Icons.hourglass_top_rounded
+            : Icons.verified_outlined,
+        color: _underReview ? const Color(0xFF6D28D9) : _green,
+        title: _underReview
+            ? 'With MDRRMO for review'
+            : (_hasSavedReport ? 'Final report submitted' : 'Incident closed'),
         message:
             _lockedMessage ??
             'The final report for this incident was already submitted and '
@@ -995,7 +1080,8 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
                 const SizedBox(height: 4),
                 Text(
                   'Submit it as Initial to keep updating it, or as Final to '
-                  'close the incident. A PDF copy goes to the MDRRMO admin.',
+                  'send it to MDRRMO for review. A PDF copy goes to the '
+                  'MDRRMO admin.',
                   textAlign: TextAlign.center,
                   style: TextStyle(fontSize: 13, color: Colors.grey[600]),
                 ),
@@ -1017,6 +1103,7 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
 
           const SizedBox(height: 24),
 
+          if (_returnedReason != null) _returnedBanner(),
           if (_hasSavedReport) _updatingBanner(),
 
           // ── Report type ──
@@ -1035,8 +1122,8 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
                       'details come in, until you submit it as Final.'
                 : (_incidentResolved
                       ? 'The report can no longer be changed after this.'
-                      : 'Closes the incident. The report can no longer be '
-                            'changed after this.'),
+                      : 'Goes to MDRRMO for review. You can\'t change it '
+                            'unless MDRRMO sends it back.'),
             style: TextStyle(
               fontSize: 12.5,
               color: _reportType == 'initial' ? _amber : Colors.grey[600],
