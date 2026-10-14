@@ -2251,6 +2251,98 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
   /// incident_detail.dart screen already uses (`_isResolved`).
   bool get _isResolved => incident['status'] == 'resolved';
 
+  /// An Initial MDRRMC Incident Report was filed. It can be updated —
+  /// and the incident stays open — until it's submitted as Final (see
+  /// IncidentResolutionScreen / Api\IncidentController::resolve()).
+  bool get _hasInitialReport {
+    final report = incident['report_data'];
+    return report is Map && report['report_type'] == 'initial';
+  }
+
+  /// Opens the report form. After an Initial report is saved the form
+  /// comes back here with the updated incident, so the button turns into
+  /// "UPDATE REPORT". A Final report goes straight back to Home.
+  Future<void> _openReport() async {
+    final updated = await Navigator.push<Map<String, dynamic>>(
+      context,
+      MaterialPageRoute<Map<String, dynamic>>(
+        builder: (_) => IncidentResolutionScreen(
+          incidentId: incident['id'] is int
+              ? incident['id'] as int
+              : int.tryParse('${incident['id']}'),
+          incidentLabel: incident['emergency_type']?.toString(),
+        ),
+      ),
+    );
+    if (!mounted || updated == null) return;
+    setState(() => incident = {...incident, ...updated});
+  }
+
+  /// "SUBMIT REPORT", or "UPDATE REPORT" once an Initial report exists.
+  Widget _reportButton() {
+    final bool updating = _hasInitialReport;
+    const Color green = Color(0xFF2E9E4F);
+    const Color amber = Color(0xFFB45309);
+    final Color color = updating ? amber : green;
+
+    return SizedBox(
+      width: double.infinity,
+      height: 52,
+      child: OutlinedButton.icon(
+        onPressed: _openReport,
+        icon: Icon(
+          updating ? Icons.edit_note : Icons.check_circle_outline,
+          size: 20,
+        ),
+        label: Text(
+          updating ? 'UPDATE REPORT' : 'SUBMIT REPORT',
+          style: const TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 0.6,
+          ),
+        ),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: color,
+          side: BorderSide(color: color, width: 1.5),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(30),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Small amber note under the report button while the report is Initial.
+  Widget _initialReportNote(String text) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF8E1),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFFFB300)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.edit_note, color: Color(0xFFB45309), size: 20),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              text,
+              style: const TextStyle(
+                fontSize: 12.5,
+                color: Color(0xFF5D4037),
+                height: 1.35,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   double get _lat =>
       double.tryParse('${incident['latitude'] ?? ''}') ?? 15.8952;
   double get _lng =>
@@ -2800,9 +2892,11 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
 
                 // Resolved first: regardless of whether this responder
                 // ever joined, once the incident is closed out there is
-                // nothing left to do here — no navigating, no filing a
-                // resolution, no accepting/declining. Shown instead of
-                // either action-button set below.
+                // nothing left to do here — no navigating, no accepting/
+                // declining. Shown instead of either action-button set
+                // below. The one exception: an admin closed the incident
+                // while the team's report was still Initial — the team
+                // can still finish it as Final.
                 if (_isResolved) ...[
                   Container(
                     width: double.infinity,
@@ -2832,6 +2926,15 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
                       ],
                     ),
                   ),
+                  if (_iHaveJoined && _hasInitialReport) ...[
+                    const SizedBox(height: 12),
+                    _initialReportNote(
+                      'Your report is still Initial. Update it and submit '
+                      'it as Final to finish it.',
+                    ),
+                    const SizedBox(height: 12),
+                    _reportButton(),
+                  ],
                 ] else if (_isMswd) ...[
                   // MSWD reaches this screen from the Incident
                   // Locations map (kept visible to them for situational
@@ -2916,43 +3019,15 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 52,
-                    child: OutlinedButton.icon(
-                      onPressed: () => Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => IncidentResolutionScreen(
-                            incidentId: incident['id'] is int
-                                ? incident['id'] as int
-                                : int.tryParse('${incident['id']}'),
-                            incidentLabel: incident['emergency_type']
-                                ?.toString(),
-                          ),
-                        ),
-                      ),
-                      icon: const Icon(Icons.check_circle_outline, size: 20),
-                      label: const Text(
-                        'SUBMIT REPORT',
-                        style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 0.6,
-                        ),
-                      ),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: const Color(0xFF2E9E4F),
-                        side: const BorderSide(
-                          color: Color(0xFF2E9E4F),
-                          width: 1.5,
-                        ),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(30),
-                        ),
-                      ),
+                  _reportButton(),
+                  if (_hasInitialReport) ...[
+                    const SizedBox(height: 12),
+                    _initialReportNote(
+                      'Initial report filed. Keep it updated as details '
+                      'come in, then submit it as Final to close the '
+                      'incident.',
                     ),
-                  ),
+                  ],
                 ] else ...[
                   SizedBox(
                     width: double.infinity,

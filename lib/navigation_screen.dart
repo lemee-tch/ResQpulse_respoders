@@ -16,11 +16,12 @@ const Color _green = Color(0xFF2E9E3F);
 /// estimated arrival. Everything stays inside the app — there is no hand-off
 /// to Google Maps or any other external maps app.
 ///
-/// Also offers "Mark as Resolved" once the responder is done on scene —
-/// opens IncidentResolutionScreen (the MDRRMC incident report form), which
-/// submits to POST /api/responder/incidents/{id}/resolve
-/// (see Api\IncidentController::resolve()). [incidentId] is passed
-/// through so that call knows which incident to close out.
+/// Also offers "Submit Report" — opens IncidentResolutionScreen (the MDRRMC
+/// incident report form), which submits to POST
+/// /api/responder/incidents/{id}/resolve (see Api\IncidentController::
+/// resolve()). An Initial report keeps the incident open and can be updated
+/// later; a Final report closes it. [incidentId] is passed through so that
+/// call knows which incident the report is for.
 ///
 /// While this screen is open, a live location stream watches for the
 /// responder physically arriving at the incident (see
@@ -121,7 +122,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
   /// Auto-surfaced once, the moment the live GPS stream puts the
   /// responder within [_arrivalThresholdMeters] of the incident. Doesn't
   /// force navigation away — just offers the shortcut; dismissing it
-  /// leaves the responder free to still tap "MARK AS RESOLVED" manually
+  /// leaves the responder free to still tap "SUBMIT REPORT" manually
   /// whenever they're actually ready.
   void _showArrivalPrompt() {
     showDialog(
@@ -131,7 +132,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
         icon: const Icon(Icons.location_on, color: _green, size: 32),
         title: const Text("You've arrived"),
         content: Text(
-          'Looks like you\'re at ${widget.destinationLabel}. Ready to submit your resolution report?',
+          'Looks like you\'re at ${widget.destinationLabel}. Ready to file the incident report?',
         ),
         actions: [
           TextButton(
@@ -145,7 +146,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
               _handleMarkResolved();
             },
             child: const Text(
-              'Mark as Resolved',
+              'Open Report',
               style: TextStyle(color: Colors.white),
             ),
           ),
@@ -309,9 +310,9 @@ class _NavigationScreenState extends State<NavigationScreen> {
     return '$hour12:$minute $period';
   }
 
-  /// Opens the incident report form. Reachable any time — a responder
-  /// may mark resolved whenever they're done on scene, regardless of how
-  /// they got there.
+  /// Opens the incident report form. Reachable any time — a responder can
+  /// file an Initial report while still on scene, or the Final report
+  /// once done, regardless of how they got there.
   void _handleMarkResolved() {
     Navigator.push(
       context,
@@ -612,7 +613,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
                                 ),
                               ),
                               child: const Text(
-                                'MARK AS RESOLVED',
+                                'SUBMIT REPORT',
                                 style: TextStyle(
                                   fontWeight: FontWeight.bold,
                                   letterSpacing: 0.5,

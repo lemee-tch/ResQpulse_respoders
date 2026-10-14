@@ -308,15 +308,76 @@ class ApiService {
     }
   }
 
-  /// Marks an incident resolved from the field AND files the MDRRMC
-  /// Incident Report. [report] is the form data (see
-  /// IncidentResolutionScreen); it travels as one JSON string field so the
-  /// nested casualty lists survive the multipart upload. The server turns
-  /// it into the PDF attached to the resolution.
-  static Future<ApiResponse> resolveIncident(
+  /// Full address of a file on the server's public storage, e.g. the
+  /// photo attached to an incident report.
+  static String storageUrl(String path) {
+    final root = baseUrl.endsWith('/api')
+        ? baseUrl.substring(0, baseUrl.length - 4)
+        : baseUrl;
+    return '$root/storage/$path';
+  }
+
+  /// The MDRRMC Incident Report already filed for this incident, so the
+  /// report form opens with it filled in — an Initial report can be
+  /// updated until it's submitted as Final. GET
+  /// /responder/incidents/{id}/report (Api\IncidentController::
+  /// reportForResponder). Data: report (null if none yet), is_final,
+  /// can_edit, photo_path, incident_status, message.
+  ///
+  /// A server that doesn't have this endpoint yet (404) counts as "no
+  /// report filed yet", so the form still opens.
+  static Future<ApiResponse> getIncidentReport(int incidentId) async {
+    try {
+      final headers = await _responderAuthHeaders();
+      final response = await http
+          .get(
+            Uri.parse('$baseUrl/responder/incidents/$incidentId/report'),
+            headers: headers,
+          )
+          .timeout(const Duration(seconds: 15));
+
+      dynamic data;
+      try {
+        data = jsonDecode(response.body);
+      } catch (_) {
+        data = null;
+      }
+
+      if (response.statusCode == 200 && data is Map) {
+        return ApiResponse.success(Map<String, dynamic>.from(data));
+      }
+      if (response.statusCode == 404) {
+        return ApiResponse.success(<String, dynamic>{
+          'report': null,
+          'is_final': false,
+          'can_edit': true,
+        });
+      }
+      return ApiResponse.error(
+        data is Map && data['message'] != null
+            ? data['message'].toString()
+            : 'Could not load the report.',
+        data: data,
+      );
+    } catch (e) {
+      return ApiResponse.error(_handleError(e));
+    }
+  }
+
+  /// Files the MDRRMC Incident Report from the field. [report] is the form
+  /// data (see IncidentResolutionScreen); it travels as one JSON string
+  /// field so the nested casualty lists survive the multipart upload. The
+  /// server turns it into the PDF shown to the admin.
+  ///
+  /// report_type 'initial' saves it and keeps the incident open — it can
+  /// be sent again to update it. 'final' saves it and resolves the
+  /// incident; after that it can't be changed. The photo already on the
+  /// report is kept unless a new [photo] is sent or [removePhoto] is true.
+  static Future<ApiResponse> submitIncidentReport(
     int incidentId, {
     String? notes,
     File? photo,
+    bool removePhoto = false,
     Map<String, dynamic>? report,
   }) async {
     try {
@@ -337,6 +398,8 @@ class ApiService {
         request.files.add(
           await http.MultipartFile.fromPath('photo', photo.path),
         );
+      } else if (removePhoto) {
+        request.fields['remove_photo'] = '1';
       }
 
       // Longer than a normal call: the server also renders the PDF.
@@ -356,7 +419,7 @@ class ApiService {
         return ApiResponse.success(data);
       }
 
-      String message = 'Could not mark this incident resolved.';
+      String message = 'Could not submit the report.';
       if (data is Map) {
         if (data['message'] != null) message = data['message'].toString();
         final errors = data['errors'];
