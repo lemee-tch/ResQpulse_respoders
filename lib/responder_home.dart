@@ -12,6 +12,7 @@ import 'incident_resolution.dart';
 import 'add_evacuation.dart';
 import 'evacuation_centers.dart';
 import 'resident_logs_screen.dart';
+import 'cleared_alerts.dart';
 
 // Same gradient as the citizen app's home header — kept identical so both
 // apps in the ResQPulse family read as one product.
@@ -42,6 +43,15 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
   // whole screen also trigger that card's own alerts fetch, same as
   // the citizen app does.
   final GlobalKey<_RecentAlertsCardState> _alertsCardKey = GlobalKey();
+
+  /// Opens Disaster Alerts. Back here, alerts cleared there are gone from
+  /// the Recent Alerts card too (MSWD only).
+  void _openDisasterAlerts() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const _DisasterAlertsScreen()),
+    ).then((_) => _alertsCardKey.currentState?.refresh(showSpinner: false));
+  }
 
   @override
   void initState() {
@@ -284,13 +294,7 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
                                 icon: Icons.campaign_outlined,
                                 iconColor: const Color(0xFF6A1B9A),
                                 bgColor: const Color(0xFFF3E5F5),
-                                onTap: () => Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) =>
-                                        const _DisasterAlertsScreen(),
-                                  ),
-                                ),
+                                onTap: _openDisasterAlerts,
                               ),
                               _QuickTile(
                                 label: 'Evacuation\nCenters',
@@ -419,13 +423,7 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
                                 icon: Icons.campaign_outlined,
                                 iconColor: const Color(0xFF6A1B9A),
                                 bgColor: const Color(0xFFF3E5F5),
-                                onTap: () => Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) =>
-                                        const _DisasterAlertsScreen(),
-                                  ),
-                                ),
+                                onTap: _openDisasterAlerts,
                               ),
                               _QuickTile(
                                 label: 'Accepted\nMissions',
@@ -915,12 +913,16 @@ class _RecentAlertsCardState extends State<_RecentAlertsCard> {
     _loadAlerts();
   }
 
-  Future<void> refresh() => _loadAlerts();
+  Future<void> refresh({bool showSpinner = true}) =>
+      _loadAlerts(showSpinner: showSpinner);
 
-  Future<void> _loadAlerts() async {
-    if (mounted) setState(() => _isLoading = true);
+  /// The 3 newest alerts from the last 3 days, without the ones cleared on
+  /// this phone (Disaster Alerts → swipe or Clear all).
+  Future<void> _loadAlerts({bool showSpinner = true}) async {
+    if (mounted && showSpinner) setState(() => _isLoading = true);
 
     final result = await ApiService.getAlerts();
+    final cleared = await ClearedAlerts.ids();
     if (!mounted) return;
 
     setState(() {
@@ -930,6 +932,8 @@ class _RecentAlertsCardState extends State<_RecentAlertsCard> {
         _alerts = (result.data as List)
             .map((e) => e as Map<String, dynamic>)
             .where((alert) {
+              final id = int.tryParse('${alert['id'] ?? ''}');
+              if (id != null && cleared.contains(id)) return false;
               final created = DateTime.tryParse(
                 alert['created_at']?.toString() ?? '',
               );
@@ -988,7 +992,7 @@ class _RecentAlertsCardState extends State<_RecentAlertsCard> {
                   MaterialPageRoute(
                     builder: (_) => const _DisasterAlertsScreen(),
                   ),
-                ),
+                ).then((_) => _loadAlerts(showSpinner: false)),
                 child: const Text(
                   'See all',
                   style: TextStyle(
@@ -1815,9 +1819,11 @@ _AlertStyle _styleForAlert(_AlertData alert) {
   return _defaultAlertStyle;
 }
 
-/// Maps directly to the `alerts` table / Alert model fillable fields —
+/// Maps directly to the `alerts` table / Alert model fields —
 /// same shape as the citizen app's _AlertData in alert.dart.
 class _AlertData {
+  /// The alert's id on the server — what "Clear" remembers on the phone.
+  final int? id;
   final String title;
   final String? subtitle;
   final String? body;
@@ -1826,6 +1832,7 @@ class _AlertData {
   final String type;
 
   const _AlertData({
+    required this.id,
     required this.title,
     required this.subtitle,
     required this.body,
@@ -1847,6 +1854,7 @@ class _AlertData {
     )?.toUtc();
 
     return _AlertData(
+      id: int.tryParse('${json['id'] ?? ''}'),
       title: json['title'] ?? '',
       subtitle: json['subtitle'],
       body: json['body'],
@@ -1895,7 +1903,6 @@ class _AlertCard extends StatelessWidget {
     final style = _styleForAlert(alert);
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       decoration: BoxDecoration(
         color: Colors.white,
@@ -1977,6 +1984,12 @@ class _DisasterAlertsScreen extends StatefulWidget {
   State<_DisasterAlertsScreen> createState() => _DisasterAlertsScreenState();
 }
 
+/// Clearing past alerts (panel comment #22), the same as the residents'
+/// app:
+///  - by themselves: the server stops sending an alert when its time is up
+///    (MDRRMO picks 1 to 30 days when sending) or when MDRRMO clears it;
+///  - on this phone: swipe an alert away, or "Clear all" — with Undo. The
+///    cleared ids are kept on the phone (ClearedAlerts).
 class _DisasterAlertsScreenState extends State<_DisasterAlertsScreen> {
   String _selectedTab = 'Recent alerts';
   bool _isLoading = true;
@@ -1985,6 +1998,9 @@ class _DisasterAlertsScreenState extends State<_DisasterAlertsScreen> {
   final List<String> _tabs = ['Recent alerts', 'Alert History'];
 
   List<_AlertData> _allAlerts = [];
+
+  /// Alerts cleared on this phone.
+  Set<int> _cleared = {};
 
   @override
   void initState() {
@@ -1999,14 +2015,19 @@ class _DisasterAlertsScreenState extends State<_DisasterAlertsScreen> {
     });
 
     final result = await ApiService.getAlerts();
+    final cleared = await ClearedAlerts.ids();
 
     if (!mounted) return;
 
     if (result.success && result.data is List) {
+      final alerts = (result.data as List)
+          .map((e) => _AlertData.fromJson(e as Map<String, dynamic>))
+          .toList();
+      // An alert the server no longer sends has cleared by itself.
+      ClearedAlerts.keepOnly(alerts.map((a) => a.id).whereType<int>());
       setState(() {
-        _allAlerts = (result.data as List)
-            .map((e) => _AlertData.fromJson(e as Map<String, dynamic>))
-            .toList();
+        _allAlerts = alerts;
+        _cleared = cleared;
         _isLoading = false;
       });
     } else {
@@ -2017,23 +2038,116 @@ class _DisasterAlertsScreenState extends State<_DisasterAlertsScreen> {
     }
   }
 
-  /// Same 7-day window as the citizen app — "Recent alerts" is an actual
-  /// time cutoff, not just "the newest few regardless of age"; "Alert
-  /// History" is the full archive, including whatever's in Recent too.
-  List<_AlertData> get _filtered {
+  /// "Recent alerts" is an actual time cutoff (7 days), not just "the
+  /// newest few regardless of age"; "Alert History" is every alert still
+  /// showing, including whatever's in Recent too.
+  List<_AlertData> _inTab(Iterable<_AlertData> alerts) {
     if (_selectedTab == 'Recent alerts') {
       final cutoff = DateTime.now().subtract(const Duration(days: 7));
-      return _allAlerts
+      return alerts
           .where(
             (a) => a.createdAtUtc != null && a.createdAtUtc!.isAfter(cutoff),
           )
           .toList();
     }
-    return _allAlerts;
+    return alerts.toList();
+  }
+
+  bool _isCleared(_AlertData alert) =>
+      alert.id != null && _cleared.contains(alert.id);
+
+  /// This tab's alerts, minus the ones cleared on this phone.
+  List<_AlertData> get _filtered =>
+      _inTab(_allAlerts.where((a) => !_isCleared(a)));
+
+  /// This tab had alerts, and all of them were cleared on this phone.
+  bool get _allClearedHere =>
+      _filtered.isEmpty && _inTab(_allAlerts).isNotEmpty;
+
+  /// Hides alerts on this phone, with Undo.
+  void _clear(List<_AlertData> alerts) {
+    final ids = alerts.map((a) => a.id).whereType<int>().toList();
+    if (ids.isEmpty) return;
+
+    setState(() => _cleared = {..._cleared, ...ids});
+    ClearedAlerts.clear(ids);
+
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          ids.length == 1 ? 'Alert cleared' : '${ids.length} alerts cleared',
+        ),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 4),
+        action: SnackBarAction(label: 'UNDO', onPressed: () => _restore(ids)),
+      ),
+    );
+  }
+
+  void _restore(List<int> ids) {
+    ClearedAlerts.restore(ids);
+    if (!mounted) return;
+    setState(() => _cleared = {..._cleared}..removeAll(ids));
+  }
+
+  Future<void> _confirmClearAll() async {
+    final alerts = _filtered;
+    if (alerts.isEmpty) return;
+
+    final recent = _selectedTab == 'Recent alerts';
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(recent ? 'Clear recent alerts?' : 'Clear all alerts?'),
+        content: Text(
+          '${alerts.length == 1 ? 'This alert' : 'These ${alerts.length} alerts'} '
+          'will be removed from this phone. New alerts from MDRRMO will '
+          'still show here.',
+          style: const TextStyle(height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text(
+              'Clear all',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (ok == true && mounted) _clear(alerts);
+  }
+
+  /// Swipe left or right to clear an alert.
+  Widget _alertItem(_AlertData alert) {
+    final card = _AlertCard(alert: alert);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: alert.id == null
+          ? card
+          : Dismissible(
+              key: ValueKey<int>(alert.id!),
+              background: const _ClearBackground(alignStart: true),
+              secondaryBackground: const _ClearBackground(alignStart: false),
+              onDismissed: (_) => _clear([alert]),
+              child: card,
+            ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
+    final alerts = _filtered;
+    final canClear = !_isLoading && _errorMessage == null && alerts.isNotEmpty;
+
     return Scaffold(
       backgroundColor: const Color(0xFFF5F6FA),
       appBar: AppBar(
@@ -2056,6 +2170,21 @@ class _DisasterAlertsScreenState extends State<_DisasterAlertsScreen> {
           ),
         ),
         centerTitle: true,
+        actions: [
+          if (canClear)
+            TextButton(
+              onPressed: _confirmClearAll,
+              child: const Text(
+                'Clear all',
+                style: TextStyle(
+                  color: _gradientTop,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 14,
+                ),
+              ),
+            ),
+          const SizedBox(width: 4),
+        ],
       ),
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2122,35 +2251,115 @@ class _DisasterAlertsScreenState extends State<_DisasterAlertsScreen> {
                       ),
                     ],
                   )
-                : _filtered.isEmpty
+                : alerts.isEmpty
                 ? ListView(
                     physics: const AlwaysScrollableScrollPhysics(),
                     padding: const EdgeInsets.symmetric(horizontal: 32),
                     children: [
                       const SizedBox(height: 80),
-                      Text(
-                        _selectedTab == 'Recent alerts'
-                            ? 'No new alerts this week — check Alert History for past updates.'
-                            : 'No alert history yet.',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(color: Colors.grey[500], fontSize: 15),
+                      Icon(
+                        Icons.notifications_none_rounded,
+                        size: 44,
+                        color: Colors.grey[350],
                       ),
+                      const SizedBox(height: 12),
+                      Text(
+                        _allClearedHere
+                            ? 'You cleared these alerts. New alerts from MDRRMO will show here.'
+                            : _selectedTab == 'Recent alerts'
+                            ? 'No new alerts this week — check Alert History for past updates.'
+                            : 'No alerts right now. Alerts from MDRRMO show here and clear by themselves after a while.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Colors.grey[500],
+                          fontSize: 15,
+                          height: 1.4,
+                        ),
+                      ),
+                      if (_allClearedHere) ...[
+                        const SizedBox(height: 8),
+                        Center(
+                          child: TextButton(
+                            onPressed: () => _restore(
+                              _inTab(
+                                _allAlerts,
+                              ).map((a) => a.id).whereType<int>().toList(),
+                            ),
+                            child: const Text('Show them again'),
+                          ),
+                        ),
+                      ],
                     ],
                   )
                 : RefreshIndicator(
                     onRefresh: _loadAlerts,
                     color: _gradientTop,
                     child: ListView.builder(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 20,
-                        vertical: 16,
-                      ),
-                      itemCount: _filtered.length,
+                      padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
+                      itemCount: alerts.length + 1,
                       itemBuilder: (context, index) {
-                        return _AlertCard(alert: _filtered[index]);
+                        if (index == 0) return const _SwipeHint();
+                        return _alertItem(alerts[index - 1]);
                       },
                     ),
                   ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One line above the list, so people know an alert can be swiped away.
+class _SwipeHint extends StatelessWidget {
+  const _SwipeHint();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12, left: 2),
+      child: Row(
+        children: [
+          Icon(Icons.swipe, size: 15, color: Colors.grey[500]),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              'Swipe an alert to clear it. Old alerts clear by themselves.',
+              style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// What shows behind an alert while it's swiped away.
+class _ClearBackground extends StatelessWidget {
+  final bool alignStart;
+  const _ClearBackground({required this.alignStart});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      alignment: alignStart ? Alignment.centerLeft : Alignment.centerRight,
+      padding: const EdgeInsets.symmetric(horizontal: 22),
+      decoration: BoxDecoration(
+        color: const Color(0xFFE6E9F2),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: const Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.done_all, color: _gradientTop, size: 20),
+          SizedBox(width: 6),
+          Text(
+            'Clear',
+            style: TextStyle(
+              color: _gradientTop,
+              fontWeight: FontWeight.bold,
+              fontSize: 14,
+            ),
           ),
         ],
       ),
@@ -2275,6 +2484,34 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
     return _hasInitialReport ? reason : null;
   }
 
+  /// The response team(s) MDRRMO sent this incident to when it verified
+  /// it (Incident Details → Verify & Assign on the admin web). Only these
+  /// teams see it and can accept it; MDRRMO can add a team later as
+  /// backup. Empty for incidents approved before teams were assigned.
+  List<String> get _assignedTeams {
+    final raw = incident['assigned_teams'];
+    if (raw is! List) return [];
+    return raw
+        .map((e) => e.toString().trim())
+        .where((e) => e.isNotEmpty)
+        .toList();
+  }
+
+  /// "BFP (your team) and SARS".
+  String get _assignedTeamsLabel {
+    final teams = _assignedTeams
+        .map((t) => t == _myAgency ? '$t (your team)' : t)
+        .toList();
+    if (teams.length <= 1) return teams.isEmpty ? '' : teams.first;
+    return '${teams.sublist(0, teams.length - 1).join(', ')} and ${teams.last}';
+  }
+
+  /// MDRRMO's instructions for the team, typed when it assigned the team.
+  String? get _mdrrmoNotes {
+    final notes = (incident['assignment_notes'] ?? '').toString().trim();
+    return notes.isEmpty ? null : notes;
+  }
+
   /// An Initial MDRRMC Incident Report was filed. It can be updated —
   /// and the incident stays open — until it's submitted as Final (see
   /// IncidentResolutionScreen / Api\IncidentController::resolve()).
@@ -2375,6 +2612,55 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
                 color: Color(0xFF5D4037),
                 height: 1.35,
               ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Blue box near the top: MDRRMO's instructions for the team.
+  Widget _mdrrmoNote(String notes) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFE3F2FD),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF90CAF9)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(
+            Icons.campaign_outlined,
+            color: Color(0xFF1565C0),
+            size: 20,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Instructions from MDRRMO',
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF1565C0),
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  notes,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF1A1A2E),
+                    height: 1.4,
+                  ),
+                ),
+              ],
             ),
           ),
         ],
@@ -2813,6 +3099,10 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
                 ),
 
                 const SizedBox(height: 22),
+                if (_mdrrmoNotes != null) ...[
+                  _mdrrmoNote(_mdrrmoNotes!),
+                  const SizedBox(height: 20),
+                ],
                 if (_hasResponders) ...[
                   const Text(
                     'Responding Team',
@@ -2854,6 +3144,16 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
                     );
                   }),
                   const SizedBox(height: 10),
+                ],
+                if (_assignedTeams.isNotEmpty) ...[
+                  _InfoRow(
+                    icon: Icons.groups_outlined,
+                    label: _assignedTeams.length == 1
+                        ? 'Assigned Team'
+                        : 'Assigned Teams',
+                    value: _assignedTeamsLabel,
+                  ),
+                  const SizedBox(height: 18),
                 ],
                 _InfoRow(
                   icon: Icons.location_on_outlined,

@@ -76,6 +76,11 @@ class _NavigationScreenState extends State<NavigationScreen> {
   StreamSubscription<Position>? _positionSubscription;
   bool _hasPromptedArrival = false;
 
+  // Framing the route: closer than this and the responder and the
+  // incident count as the same spot (see _frameRoute()).
+  static const double _sameSpotMeters = 30;
+  static const double _closeZoom = 17;
+
   @override
   void initState() {
     super.initState();
@@ -171,24 +176,52 @@ class _NavigationScreenState extends State<NavigationScreen> {
       await _fetchRoute(origin, _destination);
 
       if (!mounted) return;
-      final bounds = LatLngBounds.fromPoints([origin, _destination]);
-      _mapController.fitCamera(
-        CameraFit.bounds(
-          bounds: bounds,
-          padding: const EdgeInsets.only(
-            top: 40,
-            bottom: 220,
-            left: 40,
-            right: 40,
-          ),
-        ),
-      );
+      _frameRoute(origin);
     } catch (e) {
       if (!mounted) return;
       setState(() => _errorMessage = e.toString());
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  /// Frames the responder, the incident and the route between them.
+  ///
+  /// When they're in the same spot (already on scene, or testing right
+  /// next to the reporter) there's nothing to frame: flutter_map zooms in
+  /// forever on a box with no size, and the map then fails with
+  /// "Unsupported operation: Infinity or NaN toInt". So it just centers on
+  /// the incident instead.
+  void _frameRoute(LatLng origin) {
+    final bounds = LatLngBounds.fromPoints([
+      origin,
+      _destination,
+      ..._routePoints,
+    ]);
+    final across = Geolocator.distanceBetween(
+      bounds.south,
+      bounds.west,
+      bounds.north,
+      bounds.east,
+    );
+
+    if (across < _sameSpotMeters) {
+      _mapController.move(_destination, _closeZoom);
+      return;
+    }
+
+    _mapController.fitCamera(
+      CameraFit.bounds(
+        bounds: bounds,
+        padding: const EdgeInsets.only(
+          top: 40,
+          bottom: 220,
+          left: 40,
+          right: 40,
+        ),
+        maxZoom: _closeZoom,
+      ),
+    );
   }
 
   Future<Position> _getCurrentLocation() async {
@@ -411,6 +444,8 @@ class _NavigationScreenState extends State<NavigationScreen> {
                     options: MapOptions(
                       initialCenter: _destination,
                       initialZoom: 14,
+                      // OpenStreetMap has no tiles past 19.
+                      maxZoom: 19,
                     ),
                     children: [
                       TileLayer(

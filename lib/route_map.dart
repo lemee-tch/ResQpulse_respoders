@@ -150,10 +150,32 @@ class _IncidentRouteMapState extends State<IncidentRouteMap> {
     });
   }
 
+  /// Frames the responder, the incident and the route between them.
+  ///
+  /// When they're in the same spot (the responder is already at the
+  /// incident) it just centers on the incident: flutter_map zooms in
+  /// forever on a box with no size, and the map then fails with
+  /// "Unsupported operation: Infinity or NaN toInt".
   void _fitBoundsToRoute(LatLng a, LatLng b) {
-    final bounds = LatLngBounds.fromPoints([a, b]);
+    final bounds = LatLngBounds.fromPoints([a, b, ..._routePoints]);
+    final across = Geolocator.distanceBetween(
+      bounds.south,
+      bounds.west,
+      bounds.north,
+      bounds.east,
+    );
+
+    if (across < 30) {
+      _mapController.move(_incidentPoint, 17);
+      return;
+    }
+
     _mapController.fitCamera(
-      CameraFit.bounds(bounds: bounds, padding: const EdgeInsets.all(48)),
+      CameraFit.bounds(
+        bounds: bounds,
+        padding: const EdgeInsets.all(48),
+        maxZoom: 17,
+      ),
     );
   }
 
@@ -173,6 +195,8 @@ class _IncidentRouteMapState extends State<IncidentRouteMap> {
                   options: MapOptions(
                     initialCenter: _incidentPoint,
                     initialZoom: 15,
+                    // OpenStreetMap has no tiles past 19.
+                    maxZoom: 19,
                   ),
                   children: [
                     TileLayer(
