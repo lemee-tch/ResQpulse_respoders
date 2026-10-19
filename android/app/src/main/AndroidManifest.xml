@@ -29,6 +29,13 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- Pushes that don't name a channel (disaster alerts, MDRRMO's
+             updates on your report) show on "Alerts and Updates" instead of
+             "Miscellaneous". Incident pushes name the ringing channel
+             (incident_alerts_v2) — see lib/incident_alert_service.dart. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="responder_updates" />
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

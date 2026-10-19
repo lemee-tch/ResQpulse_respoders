@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The alarm sound the ringing notification channel plays (see
+     lib/incident_alert_service.dart). Nothing in the code points at it by
+     its resource id, so a release build would otherwise drop it. -->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@raw/alarm_sound" />

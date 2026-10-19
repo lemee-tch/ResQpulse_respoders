@@ -103,27 +103,64 @@ class ApiService {
         final data = jsonDecode(response.body);
         await saveResponder(data);
         return ApiResponse.success(data);
-      } else {
-        await clearResponderSession();
-        return ApiResponse.error('Session expired. Please log in again.');
       }
+
+      // Only a sign-in the server no longer accepts (signed out, or the
+      // account was deactivated) ends the session. A server error or a
+      // maintenance page used to sign the responder out too.
+      if (response.statusCode == 401) {
+        await clearResponderSession();
+        return ApiResponse.error(
+          'Session expired. Please log in again.',
+          statusCode: 401,
+        );
+      }
+      return ApiResponse.error(
+        'Could not reach the server (${response.statusCode}). Please try again.',
+        statusCode: response.statusCode,
+      );
     } catch (e) {
       return ApiResponse.error(_handleError(e));
     }
   }
 
+  /// Signs this phone out. Sends the phone's push token so the server
+  /// stops sending the team's incident alerts to it (other phones signed in
+  /// to the same account keep getting them), then drops the token on the
+  /// phone too — so even if the server couldn't be reached, this phone
+  /// stops ringing for that team.
   static Future<ApiResponse> responderLogout() async {
+    String? pushToken;
+    try {
+      pushToken = await FirebaseMessaging.instance.getToken().timeout(
+        const Duration(seconds: 5),
+      );
+    } catch (_) {
+      pushToken = null;
+    }
+
     try {
       final headers = await _responderAuthHeaders();
       await http
-          .post(Uri.parse('$baseUrl/responder/logout'), headers: headers)
+          .post(
+            Uri.parse('$baseUrl/responder/logout'),
+            headers: headers,
+            body: jsonEncode({if (pushToken != null) 'fcm_token': pushToken}),
+          )
           .timeout(const Duration(seconds: 10));
-      await clearResponderSession();
-      return ApiResponse.success({});
-    } catch (e) {
-      await clearResponderSession();
-      return ApiResponse.success({});
+    } catch (_) {
+      // Signed out on the phone anyway.
     }
+
+    await clearResponderSession();
+    try {
+      await FirebaseMessaging.instance.deleteToken().timeout(
+        const Duration(seconds: 5),
+      );
+    } catch (_) {
+      // A new token is made at the next sign-in either way.
+    }
+    return ApiResponse.success({});
   }
 
   // ── FCM TOKEN ────────────────────────────────────────────────────
@@ -167,6 +204,17 @@ class ApiService {
     } catch (_) {
       // Ignored — see doc comment above.
     }
+  }
+
+  /// Firebase can give the phone a new push token at any time, and the old
+  /// one stops working — without this, the phone stopped getting alerts
+  /// until the app was restarted. Call once at startup.
+  static void listenForTokenRefresh() {
+    FirebaseMessaging.instance.onTokenRefresh.listen((token) async {
+      if (await isResponderLoggedIn()) {
+        await updateFcmToken(token);
+      }
+    });
   }
 
   // ── ASSIGNED INCIDENTS ───────────────────────────────────────────
@@ -285,10 +333,9 @@ class ApiService {
     }
   }
 
-  /// Purely informational today — there's no per-responder "declined"
-  /// record kept server-side (declining just means "not me", the
-  /// incident stays open for the rest of the agency), so this never
-  /// blocks the caller's local UI update even if the request fails.
+  /// "Not me": the server keeps it (Api\IncidentController::decline()),
+  /// takes the incident off this account's list, and MDRRMO sees who
+  /// declined. The incident stays open for everyone else.
   static Future<ApiResponse> declineIncident(int incidentId) async {
     try {
       final headers = await _responderAuthHeaders();
@@ -656,11 +703,29 @@ class ApiResponse {
   final dynamic data;
   final String? error;
 
-  ApiResponse._({required this.success, this.data, this.error});
+  /// The HTTP status of a failed call when the server answered (null when
+  /// there was no connection or it timed out).
+  final int? statusCode;
+
+  ApiResponse._({
+    required this.success,
+    this.data,
+    this.error,
+    this.statusCode,
+  });
+
+  /// The server no longer accepts this sign-in — the only failure that
+  /// sends the responder back to the login screen.
+  bool get sessionExpired => statusCode == 401;
 
   factory ApiResponse.success(dynamic data) =>
       ApiResponse._(success: true, data: data);
 
-  factory ApiResponse.error(String message, {dynamic data}) =>
-      ApiResponse._(success: false, error: message, data: data);
+  factory ApiResponse.error(String message, {dynamic data, int? statusCode}) =>
+      ApiResponse._(
+        success: false,
+        error: message,
+        data: data,
+        statusCode: statusCode,
+      );
 }

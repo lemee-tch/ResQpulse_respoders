@@ -4,6 +4,11 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 
+/// The incidents a screen opened from Home shows, read from Home again each
+/// time its list changes: the incidents, whether they're loading, and the
+/// error from the last load (null when it worked).
+typedef IncidentFeed = ({List<dynamic> items, bool isLoading, String? error});
+
 // Kept in sync with the palette used across the rest of the responder app
 // (see responder_home.dart) — duplicated here (rather than imported) since
 // those are library-private consts and this screen lives in its own file.
@@ -17,7 +22,10 @@ const Map<String, Color> _statusColors = {
 };
 
 String _statusLabel(String? status) {
-  if (status == null || status.isEmpty) return 'Pending';
+  // Approved, no one has accepted it yet (see responder_home.dart).
+  if (status == null || status.isEmpty || status == 'pending') {
+    return 'Awaiting Responder';
+  }
   return status[0].toUpperCase() + status.substring(1);
 }
 
@@ -40,6 +48,13 @@ class IncidentLocationsScreen extends StatefulWidget {
   final Future<void> Function() onRetry;
   final void Function(Map<String, dynamic> incident) onOpenDetail;
 
+  /// Optional: reads Home's list again every time [changes] fires, so the
+  /// map shows new incidents after a refresh — it used to keep the copy it
+  /// was opened with (and spin forever when opened while Home was
+  /// loading).
+  final IncidentFeed Function()? live;
+  final Listenable? changes;
+
   const IncidentLocationsScreen({
     super.key,
     required this.incidents,
@@ -47,6 +62,8 @@ class IncidentLocationsScreen extends StatefulWidget {
     required this.errorMessage,
     required this.onRetry,
     required this.onOpenDetail,
+    this.live,
+    this.changes,
   });
 
   @override
@@ -61,6 +78,18 @@ class _IncidentLocationsScreenState extends State<IncidentLocationsScreen> {
   int? _selectedIndex;
   LatLng? _myLocation;
   bool _isLocating = false;
+
+  /// The map is on screen and can be moved. Moving it before then threw
+  /// (opened while the list was still loading, the map wasn't there yet).
+  bool _mapReady = false;
+
+  IncidentFeed get _feed =>
+      widget.live?.call() ??
+      (
+        items: widget.incidents,
+        isLoading: widget.isLoading,
+        error: widget.errorMessage,
+      );
 
   static const Map<String, String> _typeEmoji = {
     'Fire': '🔥',
@@ -79,8 +108,12 @@ class _IncidentLocationsScreenState extends State<IncidentLocationsScreen> {
     'resolved': Color(0xFF065F46),
   };
 
-  List<dynamic> get _plotted => widget.incidents
-      .where((i) => i['latitude'] != null && i['longitude'] != null)
+  List<dynamic> get _plotted => _feed.items
+      .where(
+        (i) =>
+            double.tryParse('${i['latitude']}') != null &&
+            double.tryParse('${i['longitude']}') != null,
+      )
       .toList();
 
   LatLng _rawPointOf(dynamic incident) => LatLng(
@@ -139,7 +172,6 @@ class _IncidentLocationsScreenState extends State<IncidentLocationsScreen> {
   void initState() {
     super.initState();
     _locateMe();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _fitAll());
   }
 
   Future<void> _locateMe() async {
@@ -173,6 +205,7 @@ class _IncidentLocationsScreenState extends State<IncidentLocationsScreen> {
   }
 
   void _fitAll() {
+    if (!_mapReady) return;
     final points = _displayPoints;
     if (points.isEmpty) return;
     if (points.length == 1) {
@@ -187,12 +220,27 @@ class _IncidentLocationsScreenState extends State<IncidentLocationsScreen> {
 
   void _flyTo(int index) {
     setState(() => _selectedIndex = index);
-    _mapController.move(_displayPoints[index], 16);
+    if (_mapReady) _mapController.move(_displayPoints[index], 16);
   }
 
   @override
   Widget build(BuildContext context) {
+    final changes = widget.changes;
+    if (changes == null) return _buildScreen(context);
+    return ListenableBuilder(
+      listenable: changes,
+      builder: (context, _) => _buildScreen(context),
+    );
+  }
+
+  Widget _buildScreen(BuildContext context) {
     final incidents = _plotted;
+    final feed = _feed;
+    final bool showSpinner = feed.isLoading && feed.items.isEmpty;
+    final String? error = feed.items.isEmpty ? feed.error : null;
+    // The map isn't on screen while the spinner is; it says when it's back
+    // (onMapReady).
+    if (showSpinner) _mapReady = false;
 
     return Scaffold(
       backgroundColor: const Color(0xFFF5F6FA),
@@ -220,7 +268,7 @@ class _IncidentLocationsScreenState extends State<IncidentLocationsScreen> {
       body: RefreshIndicator(
         onRefresh: () async {
           await widget.onRetry();
-          _fitAll();
+          if (mounted) _fitAll();
         },
         color: _gradientTop,
         child: ListView(
@@ -242,7 +290,7 @@ class _IncidentLocationsScreenState extends State<IncidentLocationsScreen> {
                 ],
               ),
               clipBehavior: Clip.antiAlias,
-              child: widget.isLoading
+              child: showSpinner
                   ? const Center(child: CircularProgressIndicator())
                   : Stack(
                       children: [
@@ -251,6 +299,12 @@ class _IncidentLocationsScreenState extends State<IncidentLocationsScreen> {
                           options: MapOptions(
                             initialCenter: _rosalesCenter,
                             initialZoom: 13,
+                            // OpenStreetMap has no tiles past 19.
+                            maxZoom: 19,
+                            onMapReady: () {
+                              _mapReady = true;
+                              _fitAll();
+                            },
                           ),
                           children: [
                             TileLayer(
@@ -444,15 +498,15 @@ class _IncidentLocationsScreenState extends State<IncidentLocationsScreen> {
 
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
-              child: widget.isLoading
+              child: showSpinner
                   ? const Padding(
                       padding: EdgeInsets.symmetric(vertical: 40),
                       child: Center(child: CircularProgressIndicator()),
                     )
-                  : widget.errorMessage != null
+                  : error != null
                   ? _LocalEmptyStateCard(
                       icon: Icons.error_outline,
-                      message: widget.errorMessage!,
+                      message: error,
                     )
                   : incidents.isEmpty
                   ? const _LocalEmptyStateCard(

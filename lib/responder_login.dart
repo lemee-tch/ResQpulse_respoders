@@ -43,6 +43,7 @@ class _ResponderLoginScreenState extends State<ResponderLoginScreen> {
       password: _passwordController.text,
     );
 
+    if (!mounted) return;
     setState(() => _isLoading = false);
 
     if (result.success) {

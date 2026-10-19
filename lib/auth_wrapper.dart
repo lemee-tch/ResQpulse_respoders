@@ -44,8 +44,13 @@ class _AuthWrapperState extends State<AuthWrapper> {
       // straight to Home without asking for a password again.
       await ApiService.registerPushToken();
       _goTo(const ResponderHomeScreen());
-    } else {
+    } else if (result.sessionExpired) {
       _goTo(const ResponderLoginScreen());
+    } else {
+      // No signal, or a server error: the sign-in is still good, so open
+      // Home with what's saved on the phone — it shows what it can and
+      // tries again. Before, a weak signal meant the login screen.
+      _goTo(const ResponderHomeScreen());
     }
   }
 

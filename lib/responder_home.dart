@@ -13,6 +13,8 @@ import 'add_evacuation.dart';
 import 'evacuation_centers.dart';
 import 'resident_logs_screen.dart';
 import 'cleared_alerts.dart';
+import 'incident_alert_service.dart';
+import 'phone_call.dart';
 
 // Same gradient as the citizen app's home header — kept identical so both
 // apps in the ResQPulse family read as one product.
@@ -29,13 +31,26 @@ class ResponderHomeScreen extends StatefulWidget {
   State<ResponderHomeScreen> createState() => _ResponderHomeScreenState();
 }
 
-class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
+class _ResponderHomeScreenState extends State<ResponderHomeScreen>
+    with WidgetsBindingObserver, RouteAware {
   Map<String, dynamic>? _responder;
   bool _isLoading = true;
 
   List<dynamic> _incidents = [];
   bool _incidentsLoading = true;
   String? _incidentsError;
+
+  /// Goes up whenever the incident list (or its loading/error state)
+  /// changes. The screens opened from here (Active Incidents, Accepted
+  /// Missions, Critical Alerts, Incident Locations) rebuild on it and read
+  /// the list again through [_feedOf] — they used to keep the copy they
+  /// were opened with: opened while the list was loading they spun
+  /// forever, and pulling to refresh didn't show new incidents.
+  final ValueNotifier<int> _incidentsVersion = ValueNotifier<int>(0);
+
+  /// The load in progress, so a new alert, coming back to the app and
+  /// coming back to Home at the same moment make one request, not three.
+  Future<void>? _incidentsRequest;
 
   // MSWD's home screen shows a Recent Alerts card where the Critical
   // Alerts section normally goes (see build() below) — same card the
@@ -61,7 +76,107 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
     // Re-register in case the FCM token rotated since the last session
     // (this can happen after app reinstalls or Firebase-side refreshes).
     ApiService.registerPushToken();
+
+    // The list reloads by itself: on every incident push, when the app
+    // comes back to the front, and when you come back to Home (see
+    // didPopNext). Before, it only changed when you pulled to refresh.
+    WidgetsBinding.instance.addObserver(this);
+    IncidentAlertService.incidentPushes.addListener(_onIncidentPush);
+    IncidentAlertService.incidentToOpen.addListener(_openRequestedIncident);
+    // The app was opened from an incident notification.
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _openRequestedIncident(),
+    );
   }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route != null)
+      IncidentAlertService.routeObserver.subscribe(this, route);
+  }
+
+  @override
+  void dispose() {
+    IncidentAlertService.routeObserver.unsubscribe(this);
+    IncidentAlertService.incidentPushes.removeListener(_onIncidentPush);
+    IncidentAlertService.incidentToOpen.removeListener(_openRequestedIncident);
+    WidgetsBinding.instance.removeObserver(this);
+    _incidentsVersion.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _loadIncidents(quiet: true);
+  }
+
+  /// Back on Home from any screen — a mission accepted, a report sent or
+  /// a decline shows right away.
+  @override
+  void didPopNext() => _loadIncidents(quiet: true);
+
+  void _onIncidentPush() => _loadIncidents(quiet: true);
+
+  /// View on the ringing screen, or tapping an incident notification:
+  /// reload, then open that incident (or Active Incidents when the push
+  /// didn't say which one, or it's not in the list).
+  Future<void> _openRequestedIncident() async {
+    final id = IncidentAlertService.incidentToOpen.value;
+    if (id == null || !mounted) return;
+    IncidentAlertService.incidentToOpen.value = null;
+
+    await _loadIncidents(quiet: true);
+    if (!mounted) return;
+
+    Map<String, dynamic>? incident;
+    for (final i in _incidents) {
+      if (i is Map && '${i['id']}' == '$id') {
+        incident = Map<String, dynamic>.from(i);
+        break;
+      }
+    }
+    if (incident != null) {
+      _openDetail(incident);
+    } else if ((_responder?['agency'] ?? '') != 'MSWD') {
+      _openActiveIncidents();
+    }
+  }
+
+  void _openDetail(Map<String, dynamic> incident) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => _IncidentDetailScreen(incident: incident),
+      ),
+    );
+  }
+
+  void _openActiveIncidents() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => _IncidentListScreen(
+          title: 'Active Incidents',
+          subtitle: 'Assigned to your agency and not yet accepted by you.',
+          incidents: _activeIncidentsNotAccepted,
+          live: () => _feedOf(_activeIncidentsNotAccepted),
+          changes: _incidentsVersion,
+          isLoading: _incidentsLoading,
+          errorMessage: _incidentsError,
+          onRetry: _loadIncidents,
+          emptyIcon: Icons.task_alt,
+          emptyMessage: 'No active incidents right now.',
+        ),
+      ),
+    );
+  }
+
+  /// [items] as the screens opened from here see them, with the list's
+  /// current loading/error state.
+  IncidentFeed _feedOf(List<dynamic> items) =>
+      (items: items, isLoading: _incidentsLoading, error: _incidentsError);
 
   Future<void> _loadResponder() async {
     final cached = await ApiService.getResponder();
@@ -79,30 +194,48 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
         _responder = result.data;
         _isLoading = false;
       });
-    } else {
+    } else if (result.sessionExpired) {
       Navigator.pushAndRemoveUntil(
         context,
         MaterialPageRoute(builder: (_) => const ResponderLoginScreen()),
         (route) => false,
       );
+    } else if (_isLoading) {
+      // No signal or a server error: stay signed in and show what's saved.
+      // Pulling to refresh with no signal used to sign the responder out.
+      setState(() => _isLoading = false);
     }
   }
 
-  Future<void> _loadIncidents() async {
-    setState(() {
-      _incidentsLoading = true;
-      _incidentsError = null;
-    });
+  /// Loads the incident list. [quiet]: keeps what's on screen while it
+  /// loads (a new alert, coming back to Home) instead of a spinner, and
+  /// keeps it if the load fails.
+  Future<void> _loadIncidents({bool quiet = false}) {
+    return _incidentsRequest ??= _fetchIncidents(
+      quiet: quiet,
+    ).whenComplete(() => _incidentsRequest = null);
+  }
+
+  Future<void> _fetchIncidents({required bool quiet}) async {
+    if (!quiet) {
+      setState(() {
+        _incidentsLoading = true;
+        _incidentsError = null;
+      });
+      _incidentsVersion.value++;
+    }
     final result = await ApiService.getAssignedIncidents();
     if (!mounted) return;
     setState(() {
       if (result.success) {
         _incidents = result.data as List<dynamic>;
-      } else {
+        _incidentsError = null;
+      } else if (!quiet || _incidents.isEmpty) {
         _incidentsError = result.error;
       }
       _incidentsLoading = false;
     });
+    _incidentsVersion.value++;
   }
 
   Future<void> _refreshAll() async {
@@ -272,19 +405,12 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
                                       // All non-resolved incidents,
                                       // including SOS.
                                       incidents: _activeIncidents,
+                                      live: () => _feedOf(_activeIncidents),
+                                      changes: _incidentsVersion,
                                       isLoading: _incidentsLoading,
                                       errorMessage: _incidentsError,
                                       onRetry: _loadIncidents,
-                                      onOpenDetail: (incident) =>
-                                          Navigator.push(
-                                            context,
-                                            MaterialPageRoute(
-                                              builder: (_) =>
-                                                  _IncidentDetailScreen(
-                                                    incident: incident,
-                                                  ),
-                                            ),
-                                          ),
+                                      onOpenDetail: _openDetail,
                                     ),
                                   ),
                                 ),
@@ -364,8 +490,9 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
                                       subtitle:
                                           'Assigned to your agency and not yet accepted by you.',
                                       incidents: _activeIncidentsNotAccepted,
-                                      incidentsGetter: () =>
-                                          _activeIncidentsNotAccepted,
+                                      live: () =>
+                                          _feedOf(_activeIncidentsNotAccepted),
+                                      changes: _incidentsVersion,
                                       isLoading: _incidentsLoading,
                                       errorMessage: _incidentsError,
                                       onRetry: _loadIncidents,
@@ -401,19 +528,12 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
                                       // All non-resolved incidents,
                                       // including SOS.
                                       incidents: _activeIncidents,
+                                      live: () => _feedOf(_activeIncidents),
+                                      changes: _incidentsVersion,
                                       isLoading: _incidentsLoading,
                                       errorMessage: _incidentsError,
                                       onRetry: _loadIncidents,
-                                      onOpenDetail: (incident) =>
-                                          Navigator.push(
-                                            context,
-                                            MaterialPageRoute(
-                                              builder: (_) =>
-                                                  _IncidentDetailScreen(
-                                                    incident: incident,
-                                                  ),
-                                            ),
-                                          ),
+                                      onOpenDetail: _openDetail,
                                     ),
                                   ),
                                 ),
@@ -439,6 +559,8 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
                                       subtitle:
                                           'Missions you\'ve personally accepted or backed up.',
                                       incidents: _acceptedMissions,
+                                      live: () => _feedOf(_acceptedMissions),
+                                      changes: _incidentsVersion,
                                       isLoading: _incidentsLoading,
                                       errorMessage: _incidentsError,
                                       onRetry: _loadIncidents,
@@ -488,6 +610,8 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
                                   subtitle:
                                       'All open incidents flagged critical priority.',
                                   incidents: _criticalIncidents,
+                                  live: () => _feedOf(_criticalIncidents),
+                                  changes: _incidentsVersion,
                                   isLoading: _incidentsLoading,
                                   errorMessage: _incidentsError,
                                   onRetry: _loadIncidents,
@@ -554,13 +678,8 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
                                 padding: const EdgeInsets.only(bottom: 12),
                                 child: _CriticalAlertCard(
                                   incident: incident,
-                                  onViewDetails: () => Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (_) => _IncidentDetailScreen(
-                                        incident: incident,
-                                      ),
-                                    ),
+                                  onViewDetails: () => _openDetail(
+                                    Map<String, dynamic>.from(incident as Map),
                                   ),
                                 ),
                               ),
@@ -1132,7 +1251,13 @@ const Map<String, Color> _statusColors = {
 };
 
 String _statusLabel(String? status) {
-  if (status == null || status.isEmpty) return 'Pending';
+  // Every incident sent to the app was approved by MDRRMO, so 'pending'
+  // means no one has accepted it yet — the admin panel's "Active · Awaiting
+  // Responder". It used to say "Pending", like a report waiting for
+  // approval.
+  if (status == null || status.isEmpty || status == 'pending') {
+    return 'Awaiting Responder';
+  }
   // The team's Final report is with MDRRMO, who then marks it resolved.
   if (status == 'for_review') return 'Under Review';
   return status[0].toUpperCase() + status.substring(1);
@@ -1427,12 +1552,14 @@ class _IncidentListScreen extends StatefulWidget {
   final IconData emptyIcon;
   final String emptyMessage;
 
-  /// Optional: re-reads the up-to-date list from the parent after
-  /// [onRetry] has refreshed it. Without this the screen only ever shows
-  /// the snapshot it was opened with, so e.g. a mission you just accepted
-  /// would keep sitting in "Active Incidents" until you backed out and
-  /// reopened it.
-  final List<dynamic> Function()? incidentsGetter;
+  /// Optional: reads the list from Home again — the incidents, whether
+  /// they're loading and the last error — every time [changes] fires (Home
+  /// reloaded). Without it the screen showed only the copy it was opened
+  /// with: opened while Home was loading it spun forever, and a mission
+  /// you just accepted kept sitting in Active Incidents. Without [live]
+  /// (Report History), the screen shows what its parent passes in.
+  final IncidentFeed Function()? live;
+  final Listenable? changes;
 
   const _IncidentListScreen({
     required this.title,
@@ -1443,7 +1570,8 @@ class _IncidentListScreen extends StatefulWidget {
     required this.onRetry,
     required this.emptyIcon,
     required this.emptyMessage,
-    this.incidentsGetter,
+    this.live,
+    this.changes,
   });
 
   @override
@@ -1451,17 +1579,27 @@ class _IncidentListScreen extends StatefulWidget {
 }
 
 class _IncidentListScreenState extends State<_IncidentListScreen> {
-  late List<dynamic> _items = widget.incidents;
-
-  Future<void> _refresh() async {
-    await widget.onRetry();
-    if (!mounted) return;
-    final getter = widget.incidentsGetter;
-    if (getter != null) setState(() => _items = getter());
-  }
+  Future<void> _refresh() => widget.onRetry();
 
   @override
   Widget build(BuildContext context) {
+    final changes = widget.changes;
+    if (changes == null) return _buildList(context);
+    return ListenableBuilder(
+      listenable: changes,
+      builder: (context, _) => _buildList(context),
+    );
+  }
+
+  Widget _buildList(BuildContext context) {
+    final IncidentFeed feed =
+        widget.live?.call() ??
+        (
+          items: widget.incidents,
+          isLoading: widget.isLoading,
+          error: widget.errorMessage,
+        );
+
     return Scaffold(
       backgroundColor: const Color(0xFFF5F6FA),
       appBar: AppBar(
@@ -1497,23 +1635,20 @@ class _IncidentListScreenState extends State<_IncidentListScreen> {
               style: TextStyle(fontSize: 12.5, color: Colors.grey[600]),
             ),
             const SizedBox(height: 14),
-            if (widget.isLoading)
+            if (feed.isLoading && feed.items.isEmpty)
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 40),
                 child: Center(child: CircularProgressIndicator()),
               )
-            else if (widget.errorMessage != null)
-              _EmptyStateCard(
-                icon: Icons.error_outline,
-                message: widget.errorMessage!,
-              )
-            else if (_items.isEmpty)
+            else if (feed.error != null && feed.items.isEmpty)
+              _EmptyStateCard(icon: Icons.error_outline, message: feed.error!)
+            else if (feed.items.isEmpty)
               _EmptyStateCard(
                 icon: widget.emptyIcon,
                 message: widget.emptyMessage,
               )
             else
-              ..._items.map(
+              ...feed.items.map(
                 (incident) => Padding(
                   padding: const EdgeInsets.only(bottom: 10),
                   child: _IncidentRowCard(
@@ -2389,8 +2524,8 @@ class _IncidentDetailScreen extends StatefulWidget {
 }
 
 class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
-  // 'declined' only reflects what THIS responder just did in this
-  // session (declining has no server-side record — see
+  // 'declined' reflects what THIS responder just did here (the server
+  // keeps it and takes the incident off their list — see
   // Api\IncidentController::decline). Whether the mission has been
   // accepted, and by whom — including possibly several backup
   // responders — is read straight from incident['responders'], which
@@ -2889,14 +3024,28 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
     final incidentId = incident['id'] is int
         ? incident['id'] as int
         : int.tryParse('${incident['id']}');
-    if (incidentId != null) {
-      // Best-effort/informational only — there's no per-responder
-      // "declined" record server-side, so this never blocks the local
-      // UI update below even if the call fails.
-      await ApiService.declineIncident(incidentId);
-    }
+    // The server keeps the decline: the incident leaves this account's list
+    // (MDRRMO sees who declined, and can send it again). So a decline that
+    // didn't reach the server isn't one — it used to say "Mission
+    // declined." even then, and the incident stayed in the list.
+    final result = incidentId == null
+        ? null
+        : await ApiService.declineIncident(incidentId);
 
     if (!mounted) return;
+    if (result == null || !result.success) {
+      setState(() => _isSubmitting = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            result?.error ?? 'Could not decline this mission. Try again.',
+          ),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+      return;
+    }
+
     setState(() {
       _isSubmitting = false;
       _missionChoice = 'declined';
@@ -2904,6 +3053,19 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(const SnackBar(content: Text('Mission declined.')));
+  }
+
+  Future<void> _callReporter(String number) async {
+    final opened = await openDialer(number);
+    if (!opened && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Couldn\'t open the phone app. Dial $number to reach the reporter.',
+          ),
+        ),
+      );
+    }
   }
 
   void _handleShare() {
@@ -2929,8 +3091,16 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
     final citizen = incident['citizen'] is Map
         ? incident['citizen'] as Map<String, dynamic>
         : null;
-    final String reporterName = citizen?['full_name'] ?? 'Not available';
-    final String reporterContact = citizen?['mobile'] ?? 'Not available';
+    // A guest has no account, but types a name and number before sending
+    // (guest_name / guest_mobile). Guest reports and SOS used to show "Not
+    // available" here even though MDRRMO has both.
+    final String reporterName =
+        _textOrNull(citizen?['full_name']) ??
+        _textOrNull(incident['guest_name']) ??
+        'Not available';
+    final String? reporterMobile =
+        _textOrNull(citizen?['mobile']) ??
+        _textOrNull(incident['guest_mobile']);
 
     final bool hasCoords =
         incident['latitude'] != null && incident['longitude'] != null;
@@ -3176,7 +3346,11 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
                 _InfoRow(
                   icon: Icons.phone_outlined,
                   label: 'Contact',
-                  value: reporterContact,
+                  value: reporterMobile ?? 'Not available',
+                  // Tap to call the reporter, e.g. to find the exact spot.
+                  onTap: reporterMobile == null
+                      ? null
+                      : () => _callReporter(reporterMobile),
                 ),
 
                 if ((incident['description'] ?? '').toString().isNotEmpty) ...[
@@ -3550,14 +3724,30 @@ class _InfoRow extends StatelessWidget {
   final IconData icon;
   final String label;
   final String value;
+
+  /// Makes the row tappable (Contact: calls the reporter) and shows a call
+  /// button at its end.
+  final VoidCallback? onTap;
+
   const _InfoRow({
     required this.icon,
     required this.label,
     required this.value,
+    this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
+    final row = _row();
+    if (onTap == null) return row;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: row,
+    );
+  }
+
+  Widget _row() {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -3578,17 +3768,35 @@ class _InfoRow extends StatelessWidget {
               const SizedBox(height: 3),
               Text(
                 value,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 14.5,
                   fontWeight: FontWeight.bold,
-                  color: Color(0xFF1A1A2E),
+                  color: onTap == null
+                      ? const Color(0xFF1A1A2E)
+                      : const Color(0xFF1565C0),
                   height: 1.4,
                 ),
               ),
             ],
           ),
         ),
+        if (onTap != null)
+          Container(
+            width: 36,
+            height: 36,
+            decoration: const BoxDecoration(
+              color: Color(0xFFE8F5E9),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.call, color: Color(0xFF2E7D32), size: 18),
+          ),
       ],
     );
   }
+}
+
+/// [value] as trimmed text, or null when it's missing or blank.
+String? _textOrNull(dynamic value) {
+  final text = (value ?? '').toString().trim();
+  return text.isEmpty ? null : text;
 }

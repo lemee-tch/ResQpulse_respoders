@@ -273,7 +273,9 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
         source: source,
         imageQuality: 80,
       );
-      if (picked != null) setState(() => _photo = File(picked.path));
+      if (picked != null && mounted) {
+        setState(() => _photo = File(picked.path));
+      }
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
