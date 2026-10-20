@@ -15,6 +15,7 @@ import 'resident_logs_screen.dart';
 import 'cleared_alerts.dart';
 import 'incident_alert_service.dart';
 import 'phone_call.dart';
+import 'team_report.dart';
 
 // Same gradient as the citizen app's home header — kept identical so both
 // apps in the ResQPulse family read as one product.
@@ -1263,6 +1264,35 @@ String _statusLabel(String? status) {
   return status[0].toUpperCase() + status.substring(1);
 }
 
+/// "Critical", "High", "Low" — empty when MDRRMO didn't set one.
+String _priorityLabel(String? priority) {
+  switch (priority) {
+    case 'critical':
+      return 'Critical';
+    case 'high':
+      return 'High';
+    case 'moderate':
+      return 'Moderate';
+    case 'low':
+      return 'Low';
+    default:
+      return '';
+  }
+}
+
+/// "just now", "12 min ago", "3 hr ago", "2 days ago" — how long ago an API
+/// timestamp was, by this phone's clock.
+String _timeAgo(String? iso) {
+  if (iso == null) return '';
+  final at = DateTime.tryParse(iso);
+  if (at == null) return '';
+  final diff = DateTime.now().toUtc().difference(at.toUtc());
+  if (diff.inMinutes < 1) return 'just now';
+  if (diff.inMinutes < 60) return '${diff.inMinutes} min ago';
+  if (diff.inHours < 24) return '${diff.inHours} hr ago';
+  return diff.inDays == 1 ? '1 day ago' : '${diff.inDays} days ago';
+}
+
 const List<String> _months = [
   'Jan',
   'Feb',
@@ -1692,6 +1722,11 @@ class _IncidentRowCard extends StatelessWidget {
     final String? priority = incident['priority'];
     final bool isSos = type == 'SOS Emergency';
     final statusColor = _statusColors[status] ?? Colors.grey;
+    // How urgent and how long ago, under the type: "Critical priority ·
+    // 12 min ago". The priority used to show only as the icon's colour.
+    final String priorityText = _priorityLabel(priority);
+    final String ago = _timeAgo(incident['created_at']?.toString());
+    final String? description = _textOrNull(incident['description']);
     final List<dynamic> respondersRaw = incident['responders'] is List
         ? incident['responders'] as List
         : const [];
@@ -1777,6 +1812,20 @@ class _IncidentRowCard extends StatelessWidget {
                       ),
                     ],
                   ),
+                  const SizedBox(height: 3),
+                  Text(
+                    [
+                      priorityText.isEmpty
+                          ? 'No priority set'
+                          : '$priorityText priority',
+                      if (ago.isNotEmpty) ago,
+                    ].join(' · '),
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w700,
+                      color: _priorityColors[priority] ?? Colors.grey[600],
+                    ),
+                  ),
                   if (aiType != null) ...[
                     const SizedBox(height: 3),
                     Text(
@@ -1794,6 +1843,15 @@ class _IncidentRowCard extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                    ),
+                  ],
+                  if (description != null) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      description,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 12, color: Colors.grey[500]),
                     ),
                   ],
                   if (responders.isNotEmpty) ...[
@@ -2655,6 +2713,54 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
     return report is Map && report['report_type'] == 'initial';
   }
 
+  /// The team's report as sent, read-only, with the PDF MDRRMO sees
+  /// (team_report.dart, item 48). The server gives it only to a responder
+  /// on the incident.
+  void _openTeamReport() {
+    final int? id = incident['id'] is int
+        ? incident['id'] as int
+        : int.tryParse('${incident['id']}');
+    if (id == null) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => TeamReportScreen(
+          incidentId: id,
+          incidentLabel:
+              incident['display_type']?.toString() ??
+              incident['emergency_type']?.toString(),
+        ),
+      ),
+    );
+  }
+
+  /// "VIEW REPORT", once the report can't be changed here anymore.
+  Widget _viewReportButton(Color color) {
+    return SizedBox(
+      width: double.infinity,
+      height: 52,
+      child: OutlinedButton.icon(
+        onPressed: _openTeamReport,
+        icon: const Icon(Icons.description_outlined, size: 20),
+        label: const Text(
+          'VIEW REPORT',
+          style: TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 0.6,
+          ),
+        ),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: color,
+          side: BorderSide(color: color, width: 1.5),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(30),
+          ),
+        ),
+      ),
+    );
+  }
+
   /// Opens the report form. After an Initial report is saved the form
   /// comes back here with the updated incident, so the button turns into
   /// "UPDATE REPORT". A Final report goes straight back to Home.
@@ -2830,6 +2936,313 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  /// The resident who reported it, when they have an account.
+  Map<String, dynamic>? get _citizen => incident['citizen'] is Map
+      ? Map<String, dynamic>.from(incident['citizen'] as Map)
+      : null;
+
+  // A guest has no account, but types a name and number before sending
+  // (guest_name / guest_mobile). Guest reports and SOS used to show "Not
+  // available" here even though MDRRMO has both.
+  String get _reporterName =>
+      _textOrNull(_citizen?['full_name']) ??
+      _textOrNull(incident['guest_name']) ??
+      'Name not given';
+
+  String? get _reporterMobile =>
+      _textOrNull(_citizen?['mobile']) ?? _textOrNull(incident['guest_mobile']);
+
+  /// "Resident · verified account", "Guest — no account"…
+  String get _reporterKind {
+    final citizen = _citizen;
+    if (citizen != null) {
+      switch (citizen['verification_status']) {
+        case 'verified':
+          return 'Resident · verified account';
+        case 'rejected':
+          return 'Resident · their ID was rejected';
+        default:
+          return 'Resident · account not verified yet';
+      }
+    }
+    return incident['citizen_id'] != null ? 'Resident' : 'Guest — no account';
+  }
+
+  bool get _hasCoords =>
+      incident['latitude'] != null && incident['longitude'] != null;
+
+  /// "15.90500, 120.64500".
+  String get _coordsText =>
+      '${_lat.toStringAsFixed(5)}, ${_lng.toStringAsFixed(5)}';
+
+  /// Where it stands: Awaiting Responder, Responding, Under Review,
+  /// Resolved.
+  String get _stageText {
+    if (_isResolved) return 'Resolved';
+    if (_isUnderReview) return 'Under Review';
+    if (_hasResponders) {
+      return _responders.length == 1
+          ? 'Responding'
+          : '${_responders.length} Responding';
+    }
+    return 'Awaiting Responder';
+  }
+
+  Color get _stageColor =>
+      _statusColors[_isResolved
+          ? 'resolved'
+          : _isUnderReview
+          ? 'for_review'
+          : _hasResponders
+          ? 'responding'
+          : 'pending'] ??
+      Colors.grey;
+
+  /// The team's MDRRMC report in one line: what kind, and when.
+  String? get _reportLine {
+    if (_isUnderReview) {
+      final at = _formatDateTime(incident['report_submitted_at']?.toString());
+      return at.isEmpty
+          ? 'Final report sent · MDRRMO is reviewing it'
+          : 'Final report sent $at · MDRRMO is reviewing it';
+    }
+    final report = incident['report_data'];
+    if (report is! Map) return null;
+    if (_returnReason != null) {
+      return 'Sent back by MDRRMO · update it and send it as Final';
+    }
+    final at = _formatDateTime(report['updated_at']?.toString());
+    if (report['report_type'] == 'initial') {
+      return at.isEmpty
+          ? 'Initial report'
+          : 'Initial report · last updated $at';
+    }
+    return at.isEmpty ? 'Final report' : 'Final report · sent $at';
+  }
+
+  /// What the team on scene wrote in their report — the situation, how
+  /// many people were hurt, what was done — so a team joining as backup
+  /// knows it too. Casualties are counted; their names stay in the report.
+  List<Widget> _reportDetails() {
+    final report = incident['report_data'];
+    if (report is! Map) return const [];
+    final String? narrative = _textOrNull(report['narrative']);
+    final String? effects = _textOrNull(report['effects']);
+    final String? actions = _textOrNull(report['actions_taken']);
+    final casualties = report['casualties'];
+    int count(String key) => casualties is Map && casualties[key] is List
+        ? (casualties[key] as List).length
+        : 0;
+    final int dead = count('dead');
+    final int injured = count('injured');
+    final int missing = count('missing');
+
+    return [
+      if (narrative != null)
+        _InfoRow(
+          icon: Icons.article_outlined,
+          label: 'What they found',
+          value: narrative,
+          plainValue: true,
+        ),
+      _InfoRow(
+        icon: Icons.personal_injury_outlined,
+        label: 'Casualties',
+        value: dead + injured + missing == 0
+            ? 'None reported'
+            : '$dead dead · $injured injured · $missing missing',
+      ),
+      if (effects != null)
+        _InfoRow(
+          icon: Icons.home_repair_service_outlined,
+          label: 'Effects',
+          value: effects,
+          plainValue: true,
+        ),
+      if (actions != null)
+        _InfoRow(
+          icon: Icons.handyman_outlined,
+          label: 'Actions taken',
+          value: actions,
+          plainValue: true,
+        ),
+    ];
+  }
+
+  /// When a responder accepted, as the server saved it — only used to put
+  /// the first one (the lead) first. Missing ones go last.
+  String _acceptedAt(Map<String, dynamic> responder) {
+    final pivot = responder['pivot'];
+    return (pivot is Map ? pivot['accepted_at'] : null)?.toString() ?? '~';
+  }
+
+  /// Who's on it: the first to accept (the lead), then backup — each with
+  /// their team and badge, and a call button for the others.
+  Widget _teamList() {
+    if (!_hasResponders) {
+      return const _InfoRow(
+        icon: Icons.shield_outlined,
+        label: 'Responding team',
+        value: 'No one has accepted yet',
+      );
+    }
+    final team = [..._responders]
+      ..sort((a, b) => _acceptedAt(a).compareTo(_acceptedAt(b)));
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(Icons.shield_outlined, color: Colors.grey[500], size: 22),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                team.length == 1
+                    ? 'Responding team'
+                    : 'Responding teams (${team.length})',
+                style: TextStyle(
+                  fontSize: 12.5,
+                  color: Colors.grey[500],
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              for (var i = 0; i < team.length; i++)
+                _teamMember(team[i], lead: i == 0),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _teamMember(Map<String, dynamic> r, {required bool lead}) {
+    final bool isMe =
+        _myResponderId != null && r['id']?.toString() == _myResponderId;
+    final String? mobile = _textOrNull(r['mobile']);
+    final String? agency = _textOrNull(r['agency']);
+    final String? badge = _textOrNull(r['badge_number']);
+    final String? station = _textOrNull(r['unit_station']);
+    final String details = [
+      lead ? 'Lead' : 'Backup',
+      if (agency != null) agency,
+      if (badge != null) 'Badge $badge',
+      if (station != null) station,
+    ].join(' · ');
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${_textOrNull(r['full_name']) ?? 'Responder'}'
+                  '${isMe ? ' (You)' : ''}',
+                  style: const TextStyle(
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF1A1A2E),
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  details,
+                  style: TextStyle(fontSize: 12.5, color: Colors.grey[600]),
+                ),
+              ],
+            ),
+          ),
+          if (mobile != null && !isMe)
+            _RoundAction(
+              icon: Icons.call,
+              color: const Color(0xFF2E7D32),
+              tooltip: 'Call $mobile',
+              onTap: () =>
+                  _callNumber(mobile, r['full_name']?.toString() ?? 'them'),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// The reporter's photos side by side; tap one to see it full screen.
+  Widget _photoStrip(List<String> photoPaths) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(Icons.photo_library_outlined, color: Colors.grey[500], size: 22),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                photoPaths.length == 1
+                    ? 'Photo from the reporter'
+                    : '${photoPaths.length} photos from the reporter',
+                style: TextStyle(
+                  fontSize: 12.5,
+                  color: Colors.grey[500],
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                height: 92,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: photoPaths.length,
+                  separatorBuilder: (_, __) => const SizedBox(width: 8),
+                  itemBuilder: (context, i) => GestureDetector(
+                    onTap: () => _openPhotoViewer(context, photoPaths, i),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: Image.network(
+                        _photoUrl(photoPaths[i]),
+                        width: 92,
+                        height: 92,
+                        fit: BoxFit.cover,
+                        loadingBuilder: (context, child, progress) {
+                          if (progress == null) return child;
+                          return Container(
+                            width: 92,
+                            height: 92,
+                            color: const Color(0xFFF0F0F0),
+                            child: const Center(
+                              child: SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                        errorBuilder: (context, error, stack) => Container(
+                          width: 92,
+                          height: 92,
+                          color: const Color(0xFFF0F0F0),
+                          child: Icon(
+                            Icons.broken_image_outlined,
+                            color: Colors.grey[400],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 
@@ -3055,27 +3468,47 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
     ).showSnackBar(const SnackBar(content: Text('Mission declined.')));
   }
 
-  Future<void> _callReporter(String number) async {
+  /// Calls the reporter, or another responder on the incident.
+  Future<void> _callNumber(String number, String who) async {
     final opened = await openDialer(number);
     if (!opened && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'Couldn\'t open the phone app. Dial $number to reach the reporter.',
+            'Couldn\'t open the phone app. Dial $number to reach $who.',
           ),
         ),
       );
     }
   }
 
+  void _copyCoords() {
+    Clipboard.setData(ClipboardData(text: _coordsText));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('GPS pin copied: $_coordsText')));
+  }
+
+  /// Copies what the team needs to know, to paste in a message: what, how
+  /// urgent, where (with a map link), when, and MDRRMO's instructions. The
+  /// reporter's name and number stay out of it.
   void _handleShare() {
     final type =
         incident['display_type'] ?? incident['emergency_type'] ?? 'Incident';
-    final location = incident['location'] ?? 'Unknown location';
-    final time = _formatDateTime(incident['created_at']);
-    Clipboard.setData(ClipboardData(text: '$type — $location ($time)'));
+    final String priority = _priorityLabel(incident['priority']?.toString());
+    final lines = <String>[
+      '$type${priority.isEmpty ? '' : ' — $priority priority'}',
+      (incident['location'] ?? 'Unknown location').toString(),
+      if (_hasCoords)
+        'GPS: $_coordsText (https://maps.google.com/?q=$_lat,$_lng)',
+      'Reported: ${_formatDateTime(incident['created_at']?.toString())}',
+      if (_mdrrmoNotes != null) 'MDRRMO: $_mdrrmoNotes',
+    ];
+    Clipboard.setData(ClipboardData(text: lines.join('\n')));
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Incident details copied to clipboard.')),
+      const SnackBar(
+        content: Text('Incident details copied — paste them in a message.'),
+      ),
     );
   }
 
@@ -3085,25 +3518,21 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
     // Title text uses display_type ("SOS Alert — Accident") when
     // available; the icon lookup just below stays keyed on rawType.
     final String type = incident['display_type']?.toString() ?? rawType;
-    final String location = incident['location'] ?? '—';
+    final String location = _textOrNull(incident['location']) ?? '—';
     final String? priority = incident['priority'];
-
-    final citizen = incident['citizen'] is Map
-        ? incident['citizen'] as Map<String, dynamic>
-        : null;
-    // A guest has no account, but types a name and number before sending
-    // (guest_name / guest_mobile). Guest reports and SOS used to show "Not
-    // available" here even though MDRRMO has both.
-    final String reporterName =
-        _textOrNull(citizen?['full_name']) ??
-        _textOrNull(incident['guest_name']) ??
-        'Not available';
-    final String? reporterMobile =
-        _textOrNull(citizen?['mobile']) ??
-        _textOrNull(incident['guest_mobile']);
-
-    final bool hasCoords =
-        incident['latitude'] != null && incident['longitude'] != null;
+    final String priorityText = _priorityLabel(priority);
+    final String? reporterMobile = _reporterMobile;
+    final String reportedAgo = _timeAgo(incident['created_at']?.toString());
+    final String reportedAt = _formatDateTime(
+      incident['created_at']?.toString(),
+    );
+    final String approvedAt = _formatDateTime(
+      incident['reviewed_at']?.toString(),
+    );
+    final String? description = _textOrNull(incident['description']);
+    final String? aiType = _textOrNull(incident['ai_detected_type']);
+    final String? aiConfidence = _textOrNull(incident['ai_confidence']);
+    final String? aiAnalysis = _textOrNull(incident['ai_analysis']);
 
     final List<String> photoPaths = _photoPaths(incident['photo_path']);
 
@@ -3151,7 +3580,7 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
           // route from the responder's current position ──
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
-            child: hasCoords
+            child: _hasCoords
                 ? IncidentRouteMap(
                     incidentLat: _lat,
                     incidentLng: _lng,
@@ -3179,12 +3608,13 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // ── Type row ──
+                // ── What it is, how urgent, where it stands ──
                 Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Container(
-                      width: 42,
-                      height: 42,
+                      width: 46,
+                      height: 46,
                       decoration: BoxDecoration(
                         color: iconColor,
                         shape: BoxShape.circle,
@@ -3192,246 +3622,207 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
                       child: Icon(
                         _incidentIcon(rawType),
                         color: Colors.white,
-                        size: 20,
+                        size: 22,
                       ),
                     ),
                     const SizedBox(width: 12),
                     Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            type,
+                            style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF1A1A2E),
+                              height: 1.25,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Wrap(
+                            spacing: 6,
+                            runSpacing: 6,
+                            children: [
+                              _DetailChip(
+                                label: priorityText.isEmpty
+                                    ? 'No priority set'
+                                    : '$priorityText priority',
+                                color: priorityText.isEmpty
+                                    ? Colors.grey
+                                    : iconColor,
+                                filled: priorityText.isNotEmpty,
+                              ),
+                              _DetailChip(
+                                label: _missionChoice == 'declined'
+                                    ? 'You declined'
+                                    : _stageText,
+                                color: _missionChoice == 'declined'
+                                    ? const Color(0xFFDC2626)
+                                    : _stageColor,
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Icon(
+                      Icons.schedule_rounded,
+                      size: 16,
+                      color: Colors.grey[500],
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
                       child: Text(
-                        type,
-                        style: const TextStyle(
-                          fontSize: 16.5,
-                          fontWeight: FontWeight.bold,
-                          color: Color(0xFF1A1A2E),
+                        [
+                          if (reportedAgo.isNotEmpty) 'Reported $reportedAgo',
+                          if (reportedAt.isNotEmpty) reportedAt,
+                          // Kept on one line when the text wraps.
+                          if (incident['id'] != null)
+                            'Incident\u00A0#${incident['id']}',
+                        ].join(' · '),
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          color: Colors.grey[700],
+                          fontWeight: FontWeight.w500,
                         ),
                       ),
                     ),
-                    if (_isResolved)
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 5,
-                        ),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFE8F5E9),
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: const Text(
-                          'Resolved',
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.bold,
-                            color: Color(0xFF2E7D32),
-                          ),
-                        ),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                if (_mdrrmoNotes != null) ...[
+                  _mdrrmoNote(_mdrrmoNotes!),
+                  const SizedBox(height: 16),
+                ],
+
+                // ── Where ──
+                _DetailSection(
+                  title: 'Location',
+                  children: [
+                    _InfoRow(
+                      icon: Icons.location_on_outlined,
+                      label: 'Address',
+                      value: location,
+                    ),
+                    if (_hasCoords)
+                      _InfoRow(
+                        icon: Icons.my_location_rounded,
+                        label: 'GPS pin',
+                        value: _coordsText,
+                        note: 'Tap to copy',
+                        onTap: _copyCoords,
+                        actionIcon: Icons.copy_rounded,
+                        actionColor: const Color(0xFF1565C0),
                       )
-                    else if (_hasResponders)
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 5,
-                        ),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFE8F5E9),
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Text(
-                          _responders.length == 1
-                              ? 'Responding'
-                              : '${_responders.length} Responding',
-                          style: const TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.bold,
-                            color: Color(0xFF2E7D32),
-                          ),
-                        ),
-                      )
-                    else if (_missionChoice == 'declined')
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 5,
-                        ),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFFFEBEE),
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: const Text(
-                          'Declined',
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.bold,
-                            color: Color(0xFFDC2626),
-                          ),
-                        ),
+                    else
+                      const _InfoRow(
+                        icon: Icons.location_off_outlined,
+                        label: 'GPS pin',
+                        value: 'Not sent',
+                        note: 'Call the reporter for the exact spot.',
                       ),
                   ],
                 ),
 
-                const SizedBox(height: 22),
-                if (_mdrrmoNotes != null) ...[
-                  _mdrrmoNote(_mdrrmoNotes!),
-                  const SizedBox(height: 20),
-                ],
-                if (_hasResponders) ...[
-                  const Text(
-                    'Responding Team',
-                    style: TextStyle(
-                      fontSize: 12.5,
-                      color: Colors.grey,
-                      fontWeight: FontWeight.w500,
+                // ── Who reported it ──
+                _DetailSection(
+                  title: 'Reporter',
+                  children: [
+                    _InfoRow(
+                      icon: Icons.person_outline_rounded,
+                      label: 'Reported by',
+                      value: _reporterName,
+                      note: _reporterKind,
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                  ..._responders.map((r) {
-                    final bool isMe =
-                        _myResponderId != null &&
-                        r['id']?.toString() == _myResponderId;
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: Row(
-                        children: [
-                          Icon(
-                            Icons.shield_outlined,
-                            size: 18,
-                            color: Colors.grey[500],
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Text(
-                              '${r['full_name'] ?? 'Unknown responder'}'
-                              '${r['agency'] != null ? ' · ${r['agency']}' : ''}'
-                              '${isMe ? ' (You)' : ''}',
-                              style: const TextStyle(
-                                fontSize: 14.5,
-                                fontWeight: FontWeight.bold,
-                                color: Color(0xFF1A1A2E),
-                              ),
-                            ),
-                          ),
-                        ],
+                    _InfoRow(
+                      icon: Icons.phone_outlined,
+                      label: 'Contact number',
+                      value: reporterMobile ?? 'Not given',
+                      // Tap to call the reporter, e.g. to find the exact spot.
+                      onTap: reporterMobile == null
+                          ? null
+                          : () => _callNumber(reporterMobile, 'the reporter'),
+                    ),
+                  ],
+                ),
+
+                // ── What happened ──
+                _DetailSection(
+                  title: 'What happened',
+                  children: [
+                    _InfoRow(
+                      icon: Icons.notes_rounded,
+                      label: 'Description',
+                      value: description ?? 'No description given.',
+                      plainValue: true,
+                    ),
+                    if (photoPaths.isNotEmpty) _photoStrip(photoPaths),
+                    if (aiType != null)
+                      _InfoRow(
+                        icon: Icons.auto_awesome,
+                        label: 'AI photo check',
+                        value:
+                            'Looks like $aiType'
+                            '${aiConfidence != null ? ' ($aiConfidence confidence)' : ''}',
+                        note: [
+                          if (aiAnalysis != null) aiAnalysis,
+                          'Only a hint — check the photo yourself.',
+                        ].join(' '),
                       ),
-                    );
-                  }),
-                  const SizedBox(height: 10),
-                ],
-                if (_assignedTeams.isNotEmpty) ...[
-                  _InfoRow(
-                    icon: Icons.groups_outlined,
-                    label: _assignedTeams.length == 1
-                        ? 'Assigned Team'
-                        : 'Assigned Teams',
-                    value: _assignedTeamsLabel,
-                  ),
-                  const SizedBox(height: 18),
-                ],
-                _InfoRow(
-                  icon: Icons.location_on_outlined,
-                  label: 'Location',
-                  value: location,
-                ),
-                const SizedBox(height: 18),
-                _InfoRow(
-                  icon: Icons.access_time_rounded,
-                  label: 'Reported at',
-                  value: _formatDateTime(incident['created_at']),
-                ),
-                const SizedBox(height: 18),
-                _InfoRow(
-                  icon: Icons.person_outline_rounded,
-                  label: 'Reported By',
-                  value: reporterName,
-                ),
-                const SizedBox(height: 18),
-                _InfoRow(
-                  icon: Icons.phone_outlined,
-                  label: 'Contact',
-                  value: reporterMobile ?? 'Not available',
-                  // Tap to call the reporter, e.g. to find the exact spot.
-                  onTap: reporterMobile == null
-                      ? null
-                      : () => _callReporter(reporterMobile),
+                  ],
                 ),
 
-                if ((incident['description'] ?? '').toString().isNotEmpty) ...[
-                  const SizedBox(height: 18),
-                  _InfoRow(
-                    icon: Icons.notes_rounded,
-                    label: 'Description',
-                    value: incident['description'].toString(),
-                  ),
-                ],
+                // ── MDRRMO and the teams ──
+                _DetailSection(
+                  title: 'Response',
+                  children: [
+                    if (approvedAt.isNotEmpty)
+                      _InfoRow(
+                        icon: Icons.verified_outlined,
+                        label: 'Approved by MDRRMO',
+                        value: approvedAt,
+                      ),
+                    if (_assignedTeams.isNotEmpty)
+                      _InfoRow(
+                        icon: Icons.groups_outlined,
+                        label: 'Sent to',
+                        value: _assignedTeamsLabel,
+                      ),
+                    _teamList(),
+                  ],
+                ),
 
-                if (photoPaths.isNotEmpty) ...[
-                  const SizedBox(height: 18),
-                  Text(
-                    photoPaths.length == 1 ? 'Photo' : 'Photos',
-                    style: TextStyle(
-                      fontSize: 12.5,
-                      color: Colors.grey[500],
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  SizedBox(
-                    height: 92,
-                    child: ListView.separated(
-                      scrollDirection: Axis.horizontal,
-                      itemCount: photoPaths.length,
-                      separatorBuilder: (_, __) => const SizedBox(width: 8),
-                      itemBuilder: (context, i) => GestureDetector(
-                        onTap: () => _openPhotoViewer(context, photoPaths, i),
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(10),
-                          child: Image.network(
-                            _photoUrl(photoPaths[i]),
-                            width: 92,
-                            height: 92,
-                            fit: BoxFit.cover,
-                            loadingBuilder: (context, child, progress) {
-                              if (progress == null) return child;
-                              return Container(
-                                width: 92,
-                                height: 92,
-                                color: const Color(0xFFF0F0F0),
-                                child: const Center(
-                                  child: SizedBox(
-                                    width: 20,
-                                    height: 20,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                    ),
-                                  ),
-                                ),
-                              );
-                            },
-                            errorBuilder: (context, error, stack) => Container(
-                              width: 92,
-                              height: 92,
-                              color: const Color(0xFFF0F0F0),
-                              child: Icon(
-                                Icons.broken_image_outlined,
-                                color: Colors.grey[400],
-                              ),
-                            ),
-                          ),
+                // ── What the team on scene reported (their MDRRMC report) ──
+                if (_reportLine != null)
+                  _DetailSection(
+                    title: "Responders' report",
+                    children: [
+                      _InfoRow(
+                        icon: Icons.description_outlined,
+                        label: 'Report',
+                        value: _reportLine!,
+                      ),
+                      ..._reportDetails(),
+                      // The whole report and its PDF — for the team on it.
+                      if (_iHaveJoined && incident['report_data'] is Map)
+                        _InfoRow(
+                          icon: Icons.picture_as_pdf_outlined,
+                          label: 'Full report',
+                          value: 'View the report and its PDF',
+                          onTap: _openTeamReport,
+                          actionIcon: Icons.chevron_right_rounded,
+                          actionColor: const Color(0xFF1565C0),
                         ),
-                      ),
-                    ),
+                    ],
                   ),
-                ],
 
-                if (incident['ai_detected_type'] != null) ...[
-                  const SizedBox(height: 18),
-                  _InfoRow(
-                    icon: Icons.auto_awesome,
-                    label: 'AI Photo Analysis',
-                    value:
-                        'Likely ${incident['ai_detected_type']}${incident['ai_confidence'] != null ? ' (${incident['ai_confidence']} confidence)' : ''}',
-                  ),
-                ],
-
-                const SizedBox(height: 30),
+                const SizedBox(height: 16),
 
                 // Resolved first: regardless of whether this responder
                 // ever joined, once the incident is closed out there is
@@ -3469,6 +3860,10 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
                       ],
                     ),
                   ),
+                  if (_iHaveJoined && incident['report_data'] is Map) ...[
+                    const SizedBox(height: 12),
+                    _viewReportButton(const Color(0xFF2E7D32)),
+                  ],
                   if (_iHaveJoined && _hasInitialReport) ...[
                     const SizedBox(height: 12),
                     _initialReportNote(
@@ -3516,32 +3911,9 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
                   ),
                   if (_iHaveJoined) ...[
                     const SizedBox(height: 12),
-                    SizedBox(
-                      width: double.infinity,
-                      height: 52,
-                      child: OutlinedButton.icon(
-                        onPressed: _openReport,
-                        icon: const Icon(Icons.description_outlined, size: 20),
-                        label: const Text(
-                          'VIEW REPORT',
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.bold,
-                            letterSpacing: 0.6,
-                          ),
-                        ),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: const Color(0xFF6D28D9),
-                          side: const BorderSide(
-                            color: Color(0xFF6D28D9),
-                            width: 1.5,
-                          ),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(30),
-                          ),
-                        ),
-                      ),
-                    ),
+                    // The report itself — it used to open the form, which
+                    // only said "With MDRRMO for review".
+                    _viewReportButton(const Color(0xFF6D28D9)),
                   ],
                 ] else if (_isMswd) ...[
                   // MSWD reaches this screen from the Incident
@@ -3725,15 +4097,27 @@ class _InfoRow extends StatelessWidget {
   final String label;
   final String value;
 
-  /// Makes the row tappable (Contact: calls the reporter) and shows a call
-  /// button at its end.
+  /// Grey text under the value: who they are, how sure, what to do…
+  final String? note;
+
+  /// Makes the row tappable, with [actionIcon] in a circle at its end — a
+  /// call button unless it says otherwise (the GPS pin copies).
   final VoidCallback? onTap;
+  final IconData actionIcon;
+  final Color actionColor;
+
+  /// Regular weight, for longer text (the description).
+  final bool plainValue;
 
   const _InfoRow({
     required this.icon,
     required this.label,
     required this.value,
+    this.note,
     this.onTap,
+    this.actionIcon = Icons.call,
+    this.actionColor = const Color(0xFF2E7D32),
+    this.plainValue = false,
   });
 
   @override
@@ -3770,27 +4154,141 @@ class _InfoRow extends StatelessWidget {
                 value,
                 style: TextStyle(
                   fontSize: 14.5,
-                  fontWeight: FontWeight.bold,
+                  fontWeight: plainValue ? FontWeight.w500 : FontWeight.bold,
                   color: onTap == null
                       ? const Color(0xFF1A1A2E)
                       : const Color(0xFF1565C0),
                   height: 1.4,
                 ),
               ),
+              if (note != null) ...[
+                const SizedBox(height: 2),
+                Text(
+                  note!,
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    color: Colors.grey[600],
+                    height: 1.35,
+                  ),
+                ),
+              ],
             ],
           ),
         ),
-        if (onTap != null)
-          Container(
-            width: 36,
-            height: 36,
-            decoration: const BoxDecoration(
-              color: Color(0xFFE8F5E9),
-              shape: BoxShape.circle,
-            ),
-            child: const Icon(Icons.call, color: Color(0xFF2E7D32), size: 18),
-          ),
+        if (onTap != null) _RoundAction(icon: actionIcon, color: actionColor),
       ],
+    );
+  }
+}
+
+/// The round button at the end of a row: call, copy…
+class _RoundAction extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+
+  /// Null when the whole row is the button (see [_InfoRow]).
+  final VoidCallback? onTap;
+  final String? tooltip;
+
+  const _RoundAction({
+    required this.icon,
+    required this.color,
+    this.onTap,
+    this.tooltip,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final Widget circle = Container(
+      width: 36,
+      height: 36,
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.12),
+        shape: BoxShape.circle,
+      ),
+      child: Icon(icon, color: color, size: 18),
+    );
+    if (onTap == null) return circle;
+    final Widget button = InkWell(
+      onTap: onTap,
+      customBorder: const CircleBorder(),
+      child: circle,
+    );
+    return tooltip == null ? button : Tooltip(message: tooltip!, child: button);
+  }
+}
+
+/// A small rounded label at the top: the priority (filled) or where the
+/// incident stands.
+class _DetailChip extends StatelessWidget {
+  final String label;
+  final Color color;
+  final bool filled;
+
+  const _DetailChip({
+    required this.label,
+    required this.color,
+    this.filled = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: filled ? color : color.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 11.5,
+          fontWeight: FontWeight.bold,
+          color: filled ? Colors.white : color,
+        ),
+      ),
+    );
+  }
+}
+
+/// One group of details on Incident Details — Location, Reporter, What
+/// happened, Response — in a light card with its name on top.
+class _DetailSection extends StatelessWidget {
+  final String title;
+  final List<Widget> children;
+
+  const _DetailSection({required this.title, required this.children});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8F9FC),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFE8EBF2)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title.toUpperCase(),
+            style: TextStyle(
+              fontSize: 11.5,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.8,
+              color: Colors.grey[600],
+            ),
+          ),
+          const SizedBox(height: 10),
+          for (var i = 0; i < children.length; i++) ...[
+            if (i > 0) const SizedBox(height: 14),
+            children[i],
+          ],
+        ],
+      ),
     );
   }
 }

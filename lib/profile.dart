@@ -226,13 +226,6 @@ class _ResponderProfileScreenState extends State<ResponderProfileScreen> {
                                 : 'View and edit your details',
                             onTap: () {},
                           ),
-                          const SizedBox(height: 10),
-                          _MenuItem(
-                            icon: Icons.notifications_none_rounded,
-                            label: 'Notification Settings',
-                            subtitle: 'Manage alerts and push notifications',
-                            onTap: () {},
-                          ),
 
                           const SizedBox(height: 24),
                           const _SectionLabel('About'),

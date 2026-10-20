@@ -29,6 +29,12 @@ String _statusLabel(String? status) {
   return status[0].toUpperCase() + status.substring(1);
 }
 
+/// "Critical priority", "High priority"… — empty when none was set.
+String _priorityText(dynamic priority) {
+  final p = (priority ?? '').toString();
+  return p.isEmpty ? '' : '${p[0].toUpperCase()}${p.substring(1)} priority';
+}
+
 // ══════════════════════════════════════════════════════════════════
 // Incident Locations — real map (flutter_map + OSM, same free stack
 // used elsewhere in this app), showing every non-resolved incident
@@ -517,9 +523,21 @@ class _IncidentLocationsScreenState extends State<IncidentLocationsScreen> {
                       children: incidents.asMap().entries.map((entry) {
                         final index = entry.key;
                         final incident = entry.value;
+                        // "SOS Alert — Fire" rather than "SOS Emergency", as
+                        // on the other screens; how urgent goes before where.
                         final String type =
-                            incident['emergency_type'] ?? 'Unknown';
-                        final String location = incident['location'] ?? '—';
+                            (incident['display_type'] ??
+                                    incident['emergency_type'] ??
+                                    'Unknown')
+                                .toString();
+                        final String priority = _priorityText(
+                          incident['priority'],
+                        );
+                        final String place = (incident['location'] ?? '—')
+                            .toString();
+                        final String location = priority.isEmpty
+                            ? place
+                            : '$priority · $place';
                         final String status = (incident['status'] ?? 'pending')
                             .toString();
                         final bool isSelected = _selectedIndex == index;

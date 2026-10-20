@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'api_service.dart';
+import 'team_report.dart';
 
 const Color _navy = Color(0xFF0D1B4C);
 const Color _green = Color(0xFF2E9E4F);
@@ -842,6 +843,20 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
   }
 
   /// Loading / couldn't load / already Final — instead of the form.
+  /// The report as sent, read-only, with its PDF — in place of this
+  /// screen, so Back returns to where the form was opened from.
+  void _openTeamReport() {
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(
+        builder: (_) => TeamReportScreen(
+          incidentId: widget.incidentId!,
+          incidentLabel: widget.incidentLabel,
+        ),
+      ),
+    );
+  }
+
   Widget _statusView({
     required IconData icon,
     required Color color,
@@ -849,6 +864,8 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
     required String message,
     String? buttonLabel,
     VoidCallback? onPressed,
+    String? secondaryLabel,
+    VoidCallback? onSecondary,
   }) {
     return Center(
       child: Padding(
@@ -893,6 +910,16 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
                   ),
                 ),
                 child: Text(buttonLabel),
+              ),
+            ],
+            if (secondaryLabel != null && onSecondary != null) ...[
+              const SizedBox(height: 6),
+              TextButton(
+                onPressed: onSecondary,
+                child: Text(
+                  secondaryLabel,
+                  style: TextStyle(color: Colors.grey[700]),
+                ),
               ),
             ],
           ],
@@ -1004,6 +1031,9 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
         onPressed: _loadSavedReport,
       );
     } else if (_isLocked) {
+      // The report can't be changed anymore, but the team can still read
+      // it (team_report.dart, item 48).
+      final bool canRead = _hasSavedReport && widget.incidentId != null;
       body = _statusView(
         icon: _underReview
             ? Icons.hourglass_top_rounded
@@ -1016,8 +1046,10 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
             _lockedMessage ??
             'The final report for this incident was already submitted and '
                 'can no longer be changed.',
-        buttonLabel: 'Back',
-        onPressed: () => Navigator.pop(context),
+        buttonLabel: canRead ? 'View Report' : 'Back',
+        onPressed: canRead ? _openTeamReport : () => Navigator.pop(context),
+        secondaryLabel: canRead ? 'Back' : null,
+        onSecondary: canRead ? () => Navigator.pop(context) : null,
       );
     } else {
       body = _buildForm(narrativeLength);
