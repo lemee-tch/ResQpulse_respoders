@@ -13,9 +13,13 @@ const Color _orange = Color(0xFFE65100);
 /// report says, where it stands with MDRRMO, and the same PDF MDRRMO sees.
 /// Opened from Incident Details ("VIEW REPORT", or "Full report" under
 /// Responders' report) by a responder on the incident — and from the report
-/// form when the report can't be changed anymore. Before, a Final report
-/// with MDRRMO or accepted only said "Final report submitted": the team
-/// couldn't read what it had sent.
+/// form when the report can't be changed anymore. Before, a report with
+/// MDRRMO or approved only said "Final report submitted": the team couldn't
+/// read what it had sent.
+///
+/// Since item 49 the team sends only the Initial report, and MDRRMO may
+/// correct it before approving it: what MDRRMO changed is said at the top,
+/// and the report and PDF show the corrected version.
 ///
 /// Loads GET /api/responder/incidents/{id}/report (see
 /// Api\IncidentController::reportForResponder()). Its pdf_url is a signed
@@ -120,20 +124,25 @@ class _TeamReportScreenState extends State<TeamReportScreen> {
   bool get _underReview => _data['under_review'] == true;
   bool get _resolved => _data['incident_status'] == 'resolved';
 
+  /// Saved on the incident but not sent to MDRRMO: an Initial report saved
+  /// before item 49 (MDRRMO sent back ones say so instead).
+  bool get _notSent => _data['can_edit'] == true && _returnedReason == null;
+
   /// The status chip: what's happening with the report now.
   String get _stageText {
     if (_returnedReason != null) return 'Sent back by MDRRMO';
-    if (_underReview) return 'With MDRRMO for review';
-    if (_resolved && !_isInitial) return 'Accepted by MDRRMO';
-    if (_isInitial) return 'Still open — can be updated';
-    return 'Final';
+    // Not resolved yet: MDRRMO marks it resolved when it approves the
+    // report (item 50).
+    if (_underReview) return 'For Review';
+    if (_resolved) return 'Approved by MDRRMO';
+    if (_notSent) return 'Saved — not sent yet';
+    return 'Sent';
   }
 
   Color get _stageColor {
     if (_returnedReason != null) return _orange;
     if (_underReview) return _purple;
-    if (_resolved && !_isInitial) return _green;
-    if (_isInitial) return _amber;
+    if (_notSent) return _amber;
     return _green;
   }
 
@@ -197,6 +206,15 @@ class _TeamReportScreenState extends State<TeamReportScreen> {
     final String submittedAt = _manila(_data['submitted_at']);
     final String? reviewedBy = _text(r['reviewed_by']);
     final String? reviewedAt = _text(r['reviewed_at']);
+    // What MDRRMO corrected before approving it (item 49).
+    final String? editedBy = _text(r['edited_by']);
+    final String editedAt = _manila(r['edited_at']);
+    final String editedParts = r['edited_parts'] is List
+        ? (r['edited_parts'] as List)
+              .map((p) => p.toString())
+              .where((p) => p.trim().isNotEmpty)
+              .join(', ')
+        : '';
     final String? photoPath = _text(_data['photo_path']);
     final casualties = r['casualties'] is Map
         ? r['casualties'] as Map
@@ -221,12 +239,12 @@ class _TeamReportScreenState extends State<TeamReportScreen> {
               width: 46,
               height: 46,
               decoration: BoxDecoration(
-                color: (_isInitial ? _amber : _green).withOpacity(0.12),
+                color: stageColor.withOpacity(0.12),
                 shape: BoxShape.circle,
               ),
               child: Icon(
                 Icons.description_outlined,
-                color: _isInitial ? _amber : _green,
+                color: stageColor,
                 size: 24,
               ),
             ),
@@ -276,11 +294,12 @@ class _TeamReportScreenState extends State<TeamReportScreen> {
         const SizedBox(height: 12),
         Text(
           [
-            if (filedAt.isNotEmpty) 'First sent $filedAt',
+            if (filedAt.isNotEmpty)
+              '${_notSent ? 'Saved' : 'First sent'} $filedAt',
             if (revision > 1 && updatedAt.isNotEmpty)
-              'last updated $updatedAt '
-                  '(${revision - 1 == 1 ? 'once' : '${revision - 1} times'})',
-            if (submittedAt.isNotEmpty && !_isInitial)
+              '${_notSent ? 'updated' : 'sent again'} $updatedAt'
+                  '${revision > 2 ? ' (${revision - 1} times)' : ''}',
+            if (submittedAt.isNotEmpty && filedAt.isEmpty)
               'sent to MDRRMO $submittedAt',
           ].join(' · '),
           style: TextStyle(
@@ -292,14 +311,25 @@ class _TeamReportScreenState extends State<TeamReportScreen> {
         ),
 
         // ── What MDRRMO did with it ──
+        if (editedBy != null)
+          _Notice(
+            icon: Icons.edit_note,
+            color: _purple,
+            background: const Color(0xFFF3E8FF),
+            text:
+                'Corrected by $editedBy'
+                '${editedAt.isNotEmpty ? ' — $editedAt' : ''}'
+                '${editedParts.isNotEmpty ? ': $editedParts' : ''}. '
+                'The report and the PDF show the corrections.',
+          ),
         if (_returnedReason != null)
           _Notice(
             icon: Icons.assignment_return_outlined,
             color: _orange,
             background: const Color(0xFFFFF3E0),
             text:
-                'MDRRMO sent it back: $_returnedReason. Update it on '
-                'Incident Details, then submit it as Final again.',
+                'MDRRMO sent it back: $_returnedReason. Fix it with UPDATE & '
+                'SEND REPORT on Incident Details, then send it again.',
           )
         else if (_underReview)
           const _Notice(
@@ -307,8 +337,9 @@ class _TeamReportScreenState extends State<TeamReportScreen> {
             color: _purple,
             background: Color(0xFFF3E8FF),
             text:
-                'MDRRMO is reviewing it. It can\'t be changed unless MDRRMO '
-                'sends it back.',
+                'For Review: MDRRMO is checking it. The incident isn\'t '
+                'resolved until they approve it. It can\'t be changed unless '
+                'MDRRMO sends it back.',
           )
         else if (reviewedBy != null)
           _Notice(
@@ -320,14 +351,14 @@ class _TeamReportScreenState extends State<TeamReportScreen> {
                 '${reviewedAt != null ? ' — $reviewedAt' : ''}. '
                 'The incident is resolved.',
           )
-        else if (_isInitial && _data['can_edit'] == true)
+        else if (_notSent)
           const _Notice(
             icon: Icons.edit_note,
             color: _amber,
             background: Color(0xFFFFF8E1),
             text:
-                'Still Initial: change it with UPDATE REPORT on Incident '
-                'Details, then submit it as Final.',
+                'Saved but not sent to MDRRMO yet: send it with UPDATE & SEND '
+                'REPORT on Incident Details.',
           ),
 
         // ── The report itself ──
@@ -744,7 +775,7 @@ class _Chip extends StatelessWidget {
   }
 }
 
-/// A coloured note under the heading: sent back, under review, reviewed.
+/// A coloured note under the heading: sent back, for review, reviewed.
 class _Notice extends StatelessWidget {
   final IconData icon;
   final Color color;

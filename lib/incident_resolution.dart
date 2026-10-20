@@ -62,25 +62,21 @@ class _Casualty {
 }
 
 /// The MDRRMC Incident Report (same format as the official paper form),
-/// opened from "Submit Report" / "Update Report" on Incident Details and
-/// from the Navigation screen. The server turns it into a PDF that the
-/// admin sees on the incident's detail page. Submits to
-/// POST /api/responder/incidents/{id}/resolve (see
-/// Api\IncidentController::resolve()).
+/// opened from "Submit Report" on Incident Details and from the Navigation
+/// screen. The server turns it into a PDF that the admin sees on the
+/// incident's detail page. Sends to POST /api/responder/incidents/{id}/resolve
+/// (see Api\IncidentController::resolve()).
 ///
-/// Report Type:
-///   Initial  saved, and the incident stays open. The responder can come
-///            back and update it as details come in (casualty status,
-///            actions taken, ...).
-///   Final    saved, and sent to MDRRMO for review (Incidents → For
-///            Review). MDRRMO marks the incident resolved, or sends the
-///            report back with what to fix — it then opens here as Initial
-///            again, with MDRRMO's reason on top. While MDRRMO has it, the
-///            report can't be changed — the app asks for confirmation first.
+/// The team sends one report, the Initial report — there is no Final report
+/// to choose anymore (item 49). It goes straight to MDRRMO for review
+/// (Incidents → For Review): MDRRMO reads it, may correct it, and marks the
+/// incident resolved — or sends the report back with what to fix; it then
+/// opens here again with MDRRMO's reason on top. While MDRRMO has it, the
+/// report can't be changed, so the app asks before sending it.
 ///
 /// When the screen opens it loads the report already filed for this
-/// incident (GET /api/responder/incidents/{id}/report), so an Initial
-/// report opens with everything filled in, including its photo.
+/// incident (GET /api/responder/incidents/{id}/report), so a report MDRRMO
+/// sent back opens with everything filled in, including its photo.
 ///
 /// Incident type, location, date, day and time are filled in by the server
 /// from the incident itself, so the responder doesn't retype them.
@@ -102,7 +98,6 @@ class IncidentResolutionScreen extends StatefulWidget {
 class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
   static const int _maxNarrative = 2000;
 
-  String _reportType = 'final'; // initial | final
   final _narrative = TextEditingController();
   final _effects = TextEditingController();
   final _actions = TextEditingController();
@@ -115,23 +110,22 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
   File? _photo;
   bool _isSubmitting = false;
 
-  // ── The report already filed (an Initial report being updated) ──────
+  // ── The report already filed (sent back by MDRRMO, or saved before) ──
   bool _isLoading = true;
   String? _loadError;
   bool _hasSavedReport = false;
 
-  /// A Final report was already submitted — nothing left to edit.
+  /// The report is with MDRRMO or was approved — nothing left to edit.
   bool _isLocked = false;
   String? _lockedMessage;
 
-  /// An admin already closed the incident (the report can still be
-  /// updated and finalized).
+  /// MDRRMO approved the report and resolved the incident.
   bool _incidentResolved = false;
 
-  /// The Final report is with MDRRMO for review (status for_review).
+  /// The report is with MDRRMO for review (status for_review).
   bool _underReview = false;
 
-  /// MDRRMO sent the Final report back: what to fix, and when.
+  /// MDRRMO sent the report back: what to fix, and when.
   String? _returnedReason;
   DateTime? _returnedAtUtc;
 
@@ -207,7 +201,6 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
   /// Puts a saved report back into the form.
   void _fillFrom(Map<String, dynamic> r) {
     _hasSavedReport = true;
-    _reportType = r['report_type'] == 'initial' ? 'initial' : 'final';
     _narrative.text = (r['narrative'] ?? '').toString();
     _effects.text = (r['effects'] ?? '').toString();
     _actions.text = (r['actions_taken'] ?? '').toString();
@@ -375,7 +368,7 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
         l.where((c) => !c.isEmpty).map((c) => c.toJson()).toList();
 
     return {
-      'report_type': _reportType,
+      'report_type': 'initial',
       'narrative': _narrative.text.trim(),
       'casualties': {
         'dead': rows(_dead),
@@ -388,22 +381,21 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
     };
   }
 
-  /// A Final report can't be changed afterwards, so it's confirmed first.
-  Future<bool> _confirmFinal() async {
+  /// The report can't be changed once MDRRMO has it, so it's confirmed
+  /// first.
+  Future<bool> _confirmSend() async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text(
-          'Submit the Final report?',
+          'Send the Initial report?',
           style: TextStyle(fontWeight: FontWeight.bold),
         ),
-        content: Text(
-          _incidentResolved
-              ? 'After this, the report can no longer be changed.'
-              : 'It goes to MDRRMO for review, and they mark the incident '
-                    'resolved. You can\'t change it unless MDRRMO sends it '
-                    'back to you.',
+        content: const Text(
+          'It goes to MDRRMO For Review. The incident isn\'t resolved until '
+          'MDRRMO approves the report — they may correct it first. You '
+          'can\'t change it unless MDRRMO sends it back to you.',
         ),
         actions: [
           TextButton(
@@ -419,7 +411,7 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
             ),
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text(
-              'Submit Final',
+              'Send to MDRRMO',
               style: TextStyle(color: Colors.white),
             ),
           ),
@@ -442,8 +434,7 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
       return;
     }
 
-    final bool isFinal = _reportType == 'final';
-    if (isFinal && !await _confirmFinal()) return;
+    if (!await _confirmSend()) return;
     if (!mounted) return;
 
     setState(() => _isSubmitting = true);
@@ -469,34 +460,16 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
         : <String, dynamic>{};
     final String serverMessage = (data['message'] ?? '').toString();
 
-    if (isFinal) {
-      _snack(
-        serverMessage.isNotEmpty
-            ? serverMessage
-            : 'Final report submitted. MDRRMO will review it, then mark '
-                  'the incident resolved.',
-        color: _green,
-      );
-      // Pop everything back to Home (past Navigation + Incident Detail).
-      Navigator.of(context).popUntil((route) => route.isFirst);
-      return;
-    }
-
     _snack(
       serverMessage.isNotEmpty
           ? serverMessage
-          : 'Initial report saved. You can update it until you submit the '
-                'Final report.',
+          : 'Initial report sent. MDRRMO will review it, then mark the '
+                'incident resolved.',
       color: _green,
     );
-    // Back to where the form was opened from; the incident is still open.
-    // The updated incident goes back so Incident Details can show
-    // "Update Report".
-    Navigator.of(context).pop(
-      data['incident'] is Map
-          ? Map<String, dynamic>.from(data['incident'] as Map)
-          : null,
-    );
+    // It's with MDRRMO now (Report History → For Review): back to Home,
+    // past Navigation and Incident Details.
+    Navigator.of(context).popUntil((route) => route.isFirst);
   }
 
   // ── UI helpers ───────────────────────────────────────────────────
@@ -526,10 +499,9 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
     return '${_months[m.month - 1]} ${m.day}, $hour12:$minute $period';
   }
 
-  String get _submitLabel {
-    if (_reportType == 'final') return 'SUBMIT FINAL REPORT';
-    return _hasSavedReport ? 'UPDATE INITIAL REPORT' : 'SUBMIT INITIAL REPORT';
-  }
+  String get _submitLabel => _returnedReason != null
+      ? 'SEND INITIAL REPORT AGAIN'
+      : 'SEND INITIAL REPORT';
 
   InputDecoration _decoration(String hint) => InputDecoration(
     hintText: hint,
@@ -590,24 +562,6 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
               null,
       style: const TextStyle(fontSize: 14, color: _ink),
       decoration: _decoration(hint),
-    );
-  }
-
-  Widget _typeChip(String value, String label) {
-    final selected = _reportType == value;
-    return ChoiceChip(
-      label: Text(label),
-      selected: selected,
-      showCheckmark: false,
-      selectedColor: _navy,
-      backgroundColor: Colors.white,
-      side: BorderSide(color: selected ? _navy : Colors.grey[300]!),
-      labelStyle: TextStyle(
-        color: selected ? Colors.white : _ink,
-        fontWeight: FontWeight.w600,
-        fontSize: 13,
-      ),
-      onSelected: (_) => setState(() => _reportType = value),
     );
   }
 
@@ -744,44 +698,19 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
     );
   }
 
-  /// Shown at the top while an Initial report is being updated.
+  /// Shown at the top when the form opens with a report already in it:
+  /// one MDRRMO sent back, or one saved before the team could only send
+  /// the Initial report (it was kept open then).
   Widget _updatingBanner() {
     final String when = _savedAtUtc != null
-        ? ' Last saved ${_formatManila(_savedAtUtc!)}'
-              '${_revision > 1 ? ' (updated ${_revision - 1}×)' : ''}.'
+        ? ' ${_returnedReason != null ? 'Last sent' : 'Saved'} '
+              '${_formatManila(_savedAtUtc!)}'
+              '${_revision > 1 ? ' (sent $_revision×)' : ''}.'
         : '';
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(12),
-      margin: const EdgeInsets.only(bottom: 20),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFF8E1),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFFFB300)),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Icon(Icons.edit_note, color: _amber, size: 22),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              'You\'re updating the Initial report.$when '
-              'Submit it as Final once everything is in'
-              '${_incidentResolved ? '.' : ' — MDRRMO then reviews it.'}',
-              style: const TextStyle(
-                fontSize: 12.5,
-                color: Color(0xFF5D4037),
-                height: 1.4,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
+    return Container(child: Row(crossAxisAlignment: CrossAxisAlignment.start));
   }
 
-  /// Shown at the top when MDRRMO sent the Final report back.
+  /// Shown at the top when MDRRMO sent the report back.
   Widget _returnedBanner() {
     final String when = _returnedAtUtc != null
         ? ' (${_formatManila(_returnedAtUtc!)})'
@@ -827,7 +756,7 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
                 ),
                 const SizedBox(height: 3),
                 const Text(
-                  'Fix it, then submit it as Final again.',
+                  'Fix it, then send it again.',
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
@@ -842,7 +771,8 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
     );
   }
 
-  /// Loading / couldn't load / already Final — instead of the form.
+  /// Loading / couldn't load / with MDRRMO or approved — instead of the
+  /// form.
   /// The report as sent, read-only, with its PDF — in place of this
   /// screen, so Back returns to where the form was opened from.
   void _openTeamReport() {
@@ -1040,12 +970,16 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
             : Icons.verified_outlined,
         color: _underReview ? const Color(0xFF6D28D9) : _green,
         title: _underReview
-            ? 'With MDRRMO for review'
-            : (_hasSavedReport ? 'Final report submitted' : 'Incident closed'),
+            ? 'For Review'
+            : (_hasSavedReport
+                  ? (_incidentResolved
+                        ? 'Report approved by MDRRMO'
+                        : 'Report sent')
+                  : 'Incident closed'),
         message:
             _lockedMessage ??
-            'The final report for this incident was already submitted and '
-                'can no longer be changed.',
+            'This report was already sent to MDRRMO and can no longer be '
+                'changed.',
         buttonLabel: canRead ? 'View Report' : 'Back',
         onPressed: canRead ? _openTeamReport : () => Navigator.pop(context),
         secondaryLabel: canRead ? 'Back' : null,
@@ -1089,17 +1023,22 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
           Center(
             child: Column(
               children: [
+                // A report, not a check mark: sending it doesn't resolve
+                // the incident — MDRRMO does, when it approves the report
+                // (item 50).
                 Container(
                   width: 68,
                   height: 68,
                   decoration: BoxDecoration(
-                    color: _hasSavedReport ? _amber : _green,
+                    color: _hasSavedReport ? _amber : _navy,
                     shape: BoxShape.circle,
                   ),
                   child: Icon(
-                    _hasSavedReport ? Icons.edit_note : Icons.check,
+                    _hasSavedReport
+                        ? Icons.edit_note
+                        : Icons.assignment_outlined,
                     color: Colors.white,
-                    size: 38,
+                    size: 36,
                   ),
                 ),
                 const SizedBox(height: 12),
@@ -1113,9 +1052,9 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'Submit it as Initial to keep updating it, or as Final to '
-                  'send it to MDRRMO for review. A PDF copy goes to the '
-                  'MDRRMO admin.',
+                  'Send it when you\'re done on scene. It goes to MDRRMO For '
+                  'Review — the incident is resolved only when MDRRMO '
+                  'approves it. A PDF copy goes to the MDRRMO admin.',
                   textAlign: TextAlign.center,
                   style: TextStyle(fontSize: 13, color: Colors.grey[600]),
                 ),
@@ -1140,27 +1079,37 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
           if (_returnedReason != null) _returnedBanner(),
           if (_hasSavedReport) _updatingBanner(),
 
-          // ── Report type ──
+          // ── Report type: always Initial (item 49) ──
           _label('Report Type'),
-          Wrap(
-            spacing: 8,
-            children: [
-              _typeChip('initial', 'Initial'),
-              _typeChip('final', 'Final'),
-            ],
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+            decoration: BoxDecoration(
+              color: _amber.withOpacity(0.10),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: _amber.withOpacity(0.45)),
+            ),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.description_outlined, size: 16, color: _amber),
+                SizedBox(width: 6),
+                Text(
+                  'Initial Report',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: _amber,
+                  ),
+                ),
+              ],
+            ),
           ),
           const SizedBox(height: 6),
           Text(
-            _reportType == 'initial'
-                ? 'The incident stays open. You can update this report as '
-                      'details come in, until you submit it as Final.'
-                : (_incidentResolved
-                      ? 'The report can no longer be changed after this.'
-                      : 'Goes to MDRRMO for review. You can\'t change it '
-                            'unless MDRRMO sends it back.'),
+            'The only report the team sends. It goes to MDRRMO for review ',
             style: TextStyle(
               fontSize: 12.5,
-              color: _reportType == 'initial' ? _amber : Colors.grey[600],
+              color: Colors.grey[600],
               height: 1.35,
             ),
           ),

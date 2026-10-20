@@ -20,7 +20,7 @@ import 'incoming_incident_overlay.dart';
 ///
 ///   type=incident  a report or SOS sent to the team (incident_id says
 ///                  which) — rings, with the full-screen alert
-///   type=report    MDRRMO accepted or sent back the team's Final report
+///   type=report    MDRRMO approved or sent back the team's report
 ///   type=alert     a disaster alert from Alerts & Broadcast
 ///
 /// The last two show as a normal notification. Before, every push rang as

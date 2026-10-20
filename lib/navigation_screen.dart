@@ -19,9 +19,10 @@ const Color _green = Color(0xFF2E9E3F);
 /// Also offers "Submit Report" — opens IncidentResolutionScreen (the MDRRMC
 /// incident report form), which submits to POST
 /// /api/responder/incidents/{id}/resolve (see Api\IncidentController::
-/// resolve()). An Initial report keeps the incident open and can be updated
-/// later; a Final report closes it. [incidentId] is passed through so that
-/// call knows which incident the report is for.
+/// resolve()). The team sends the Initial report there — the only report it
+/// sends — and MDRRMO reviews it, then marks the incident resolved.
+/// [incidentId] is passed through so that call knows which incident the
+/// report is for.
 ///
 /// While this screen is open, a live location stream watches for the
 /// responder physically arriving at the incident (see
@@ -343,9 +344,9 @@ class _NavigationScreenState extends State<NavigationScreen> {
     return '$hour12:$minute $period';
   }
 
-  /// Opens the incident report form. Reachable any time — a responder can
-  /// file an Initial report while still on scene, or the Final report
-  /// once done, regardless of how they got there.
+  /// Opens the incident report form. Reachable any time, regardless of how
+  /// the responder got here — the Initial report goes to MDRRMO when it's
+  /// sent.
   void _handleMarkResolved() {
     Navigator.push(
       context,

@@ -365,11 +365,12 @@ class ApiService {
   }
 
   /// The MDRRMC Incident Report already filed for this incident, so the
-  /// report form opens with it filled in — an Initial report can be
-  /// updated until it's submitted as Final. GET
+  /// report form opens with it filled in (a report MDRRMO sent back) and the
+  /// team can read it (team_report.dart). GET
   /// /responder/incidents/{id}/report (Api\IncidentController::
-  /// reportForResponder). Data: report (null if none yet), is_final,
-  /// can_edit, photo_path, incident_status, message.
+  /// reportForResponder). Data: report (null if none yet — with edited_by /
+  /// edited_parts when MDRRMO corrected it), pdf_url, under_review,
+  /// can_edit, returned_reason, photo_path, incident_status, message.
   ///
   /// A server that doesn't have this endpoint yet (404) counts as "no
   /// report filed yet", so the form still opens.
@@ -416,9 +417,9 @@ class ApiService {
   /// field so the nested casualty lists survive the multipart upload. The
   /// server turns it into the PDF shown to the admin.
   ///
-  /// report_type 'initial' saves it and keeps the incident open — it can
-  /// be sent again to update it. 'final' saves it and resolves the
-  /// incident; after that it can't be changed. The photo already on the
+  /// It's the Initial report — the only one the team sends (item 49). It
+  /// goes to MDRRMO for review, and can't be changed until MDRRMO sends it
+  /// back; MDRRMO then approves it as resolved. The photo already on the
   /// report is kept unless a new [photo] is sent or [removePhoto] is true.
   static Future<ApiResponse> submitIncidentReport(
     int incidentId, {

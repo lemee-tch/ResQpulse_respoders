@@ -268,7 +268,7 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen>
     'low': 3,
   };
 
-  /// Resolved, or the team's Final report is with MDRRMO for review —
+  /// Resolved, or the team's report is with MDRRMO for review —
   /// either way there's nothing left to do on it (it's in Report History).
   /// The server already leaves both out of the list; this keeps a stale
   /// copy from showing them.
@@ -1259,8 +1259,10 @@ String _statusLabel(String? status) {
   if (status == null || status.isEmpty || status == 'pending') {
     return 'Awaiting Responder';
   }
-  // The team's Final report is with MDRRMO, who then marks it resolved.
-  if (status == 'for_review') return 'Under Review';
+  // The team's report is with MDRRMO. It isn't resolved yet: MDRRMO marks
+  // it resolved when it approves the report (item 50 — it said "Under
+  // Review").
+  if (status == 'for_review') return 'For Review';
   return status[0].toUpperCase() + status.substring(1);
 }
 
@@ -1591,6 +1593,10 @@ class _IncidentListScreen extends StatefulWidget {
   final IncidentFeed Function()? live;
   final Listenable? changes;
 
+  /// Optional: the list under headings, in this order (Report History:
+  /// For Review, then Resolved). Empty ones are left out.
+  final List<_ListSection>? sections;
+
   const _IncidentListScreen({
     required this.title,
     required this.subtitle,
@@ -1602,6 +1608,7 @@ class _IncidentListScreen extends StatefulWidget {
     required this.emptyMessage,
     this.live,
     this.changes,
+    this.sections,
   });
 
   @override
@@ -1677,27 +1684,140 @@ class _IncidentListScreenState extends State<_IncidentListScreen> {
                 icon: widget.emptyIcon,
                 message: widget.emptyMessage,
               )
+            else if (widget.sections != null)
+              ..._sectioned(context, feed.items, widget.sections!)
             else
-              ...feed.items.map(
-                (incident) => Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: _IncidentRowCard(
-                    incident: incident,
-                    // Refresh on the way back — the detail screen is where
-                    // a mission gets accepted, so the list must re-read
-                    // the parent's data to drop it.
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) =>
-                            _IncidentDetailScreen(incident: incident),
-                      ),
-                    ).then((_) => _refresh()),
+              ...feed.items.map((incident) => _row(context, incident)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _row(BuildContext context, dynamic incident) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: _IncidentRowCard(
+        incident: incident,
+        // Refresh on the way back — the detail screen is where a mission
+        // gets accepted, so the list must re-read the parent's data to
+        // drop it.
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => _IncidentDetailScreen(incident: incident),
+          ),
+        ).then((_) => _refresh()),
+      ),
+    );
+  }
+
+  /// Each section's heading and cards, skipping empty sections; anything
+  /// no section takes goes last, without a heading.
+  List<Widget> _sectioned(
+    BuildContext context,
+    List<dynamic> items,
+    List<_ListSection> sections,
+  ) {
+    final rows = <Widget>[];
+    for (final section in sections) {
+      final mine = items.where(section.test).toList();
+      if (mine.isEmpty) continue;
+      rows.add(
+        _SectionHeading(
+          section: section,
+          count: mine.length,
+          first: rows.isEmpty,
+        ),
+      );
+      rows.addAll(mine.map((incident) => _row(context, incident)));
+    }
+    rows.addAll(
+      items
+          .where((i) => !sections.any((s) => s.test(i)))
+          .map((incident) => _row(context, incident)),
+    );
+    return rows;
+  }
+}
+
+/// A heading in an incident list and which incidents go under it.
+class _ListSection {
+  final String title;
+  final String note;
+  final Color color;
+  final IconData icon;
+  final bool Function(dynamic incident) test;
+
+  const _ListSection({
+    required this.title,
+    required this.note,
+    required this.color,
+    required this.icon,
+    required this.test,
+  });
+}
+
+/// "⏳ FOR REVIEW  2" with what it means underneath.
+class _SectionHeading extends StatelessWidget {
+  final _ListSection section;
+  final int count;
+  final bool first;
+
+  const _SectionHeading({
+    required this.section,
+    required this.count,
+    required this.first,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(top: first ? 0 : 10, bottom: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(section.icon, size: 16, color: section.color),
+              const SizedBox(width: 6),
+              Text(
+                section.title.toUpperCase(),
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 0.6,
+                  color: section.color,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
+                decoration: BoxDecoration(
+                  color: section.color.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  '$count',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: section.color,
                   ),
                 ),
               ),
-          ],
-        ),
+            ],
+          ),
+          const SizedBox(height: 3),
+          Text(
+            section.note,
+            style: TextStyle(
+              fontSize: 11.5,
+              color: Colors.grey[600],
+              height: 1.35,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1719,6 +1839,10 @@ class _IncidentRowCard extends StatelessWidget {
     final String? aiType = incident['ai_detected_type'];
     final String location = incident['location'] ?? '';
     final String status = (incident['status'] ?? 'pending').toString();
+    // Report History: the team is done on scene (For Review or Resolved).
+    final String teamLabel = status == 'for_review' || status == 'resolved'
+        ? 'Responded'
+        : 'Responding';
     final String? priority = incident['priority'];
     final bool isSos = type == 'SOS Emergency';
     final statusColor = _statusColors[status] ?? Colors.grey;
@@ -1867,8 +1991,8 @@ class _IncidentRowCard extends StatelessWidget {
                         Expanded(
                           child: Text(
                             responders.length == 1
-                                ? 'Responding: ${responders.first['full_name'] ?? 'Assigned'}'
-                                : 'Responding: ${responders.first['full_name'] ?? 'Assigned'} +${responders.length - 1} more',
+                                ? '$teamLabel: ${responders.first['full_name'] ?? 'Assigned'}'
+                                : '$teamLabel: ${responders.first['full_name'] ?? 'Assigned'} +${responders.length - 1} more',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
@@ -1898,8 +2022,11 @@ class _IncidentRowCard extends StatelessWidget {
 }
 
 // ══════════════════════════════════════════════════════════════════
-// Report History (Resolved) — resolved incidents THIS responder
-// personally accepted (or backed up on). Backed by its own endpoint
+// Report History — incidents THIS responder personally accepted (or
+// backed up on) once the team sent its report: For Review while MDRRMO
+// checks the report, Resolved once MDRRMO approves it (item 50: the two
+// are under their own headings, so a report under review doesn't look
+// resolved). Backed by its own endpoint
 // (GET /responder/incidents/history, IncidentController::
 // resolvedForResponder) rather than filtering the home screen's
 // _incidents list, because that list only ever holds OPEN incidents —
@@ -1944,13 +2071,32 @@ class _ReportHistoryScreenState extends State<_ReportHistoryScreen> {
     });
   }
 
+  /// Reports MDRRMO is still checking first — they aren't resolved yet —
+  /// then the resolved ones.
+  static final List<_ListSection> _sections = [
+    _ListSection(
+      title: 'For Review',
+      note:
+          'Your report is with MDRRMO. Not resolved yet — MDRRMO marks the '
+          'incident resolved when they approve the report.',
+      color: _statusColors['for_review']!,
+      icon: Icons.hourglass_top_rounded,
+      test: (i) => i['status'] == 'for_review',
+    ),
+    _ListSection(
+      title: 'Resolved',
+      note: 'MDRRMO approved the report.',
+      color: _statusColors['resolved']!,
+      icon: Icons.check_circle_outline,
+      test: (i) => i['status'] == 'resolved',
+    ),
+  ];
+
   @override
   Widget build(BuildContext context) {
     return _IncidentListScreen(
       title: 'Report History',
-      subtitle:
-          'Incidents you responded to — resolved, or with MDRRMO for '
-          'review.',
+      subtitle: 'Incidents you responded to, once your team sent the report.',
       incidents: _incidents,
       isLoading: _isLoading,
       errorMessage: _errorMessage,
@@ -1958,7 +2104,8 @@ class _ReportHistoryScreenState extends State<_ReportHistoryScreen> {
       emptyIcon: Icons.fact_check_outlined,
       emptyMessage:
           'No reports yet. Incidents you\'ve responded to show up here once '
-          'you submit the Final report.',
+          'you send the Initial report.',
+      sections: _sections,
     );
   }
 }
@@ -2180,7 +2327,7 @@ class _DisasterAlertsScreen extends StatefulWidget {
 /// Clearing past alerts (panel comment #22), the same as the residents'
 /// app:
 ///  - by themselves: the server stops sending an alert when its time is up
-///    (MDRRMO picks 1 to 30 days when sending) or when MDRRMO clears it;
+///    (24 hours after it's sent — item 50) or when MDRRMO clears it;
 ///  - on this phone: swipe an alert away, or "Clear all" — with Undo. The
 ///    cleared ids are kept on the phone (ClearedAlerts).
 class _DisasterAlertsScreenState extends State<_DisasterAlertsScreen> {
@@ -2665,8 +2812,8 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
   /// incident_detail.dart screen already uses (`_isResolved`).
   bool get _isResolved => incident['status'] == 'resolved';
 
-  /// The team's Final report is with MDRRMO (Incidents → For Review). It
-  /// can't be changed unless MDRRMO sends it back.
+  /// The team's report is with MDRRMO (Incidents → For Review). It can't
+  /// be changed unless MDRRMO sends it back.
   bool get _isUnderReview => incident['status'] == 'for_review';
 
   /// What MDRRMO asked the team to fix, while a report it sent back is
@@ -2705,9 +2852,11 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
     return notes.isEmpty ? null : notes;
   }
 
-  /// An Initial MDRRMC Incident Report was filed. It can be updated —
-  /// and the incident stays open — until it's submitted as Final (see
-  /// IncidentResolutionScreen / Api\IncidentController::resolve()).
+  /// A report is saved on the incident but not with MDRRMO: one MDRRMO sent
+  /// back, or an Initial report saved before the team could only send the
+  /// Initial report (the incident was kept open then). The team sends it
+  /// from the report form (IncidentResolutionScreen /
+  /// Api\IncidentController::resolve()).
   bool get _hasInitialReport {
     final report = incident['report_data'];
     return report is Map && report['report_type'] == 'initial';
@@ -2761,9 +2910,8 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
     );
   }
 
-  /// Opens the report form. After an Initial report is saved the form
-  /// comes back here with the updated incident, so the button turns into
-  /// "UPDATE REPORT". A Final report goes straight back to Home.
+  /// Opens the report form. Sending the report goes straight back to Home
+  /// — it's with MDRRMO then (Report History → For Review).
   Future<void> _openReport() async {
     final updated = await Navigator.push<Map<String, dynamic>>(
       context,
@@ -2780,7 +2928,8 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
     setState(() => incident = {...incident, ...updated});
   }
 
-  /// "SUBMIT REPORT", or "UPDATE REPORT" once an Initial report exists.
+  /// "SUBMIT REPORT", or "UPDATE & SEND REPORT" when one is saved on the
+  /// incident (sent back by MDRRMO, or saved before).
   Widget _reportButton() {
     final bool updating = _hasInitialReport;
     const Color green = Color(0xFF2E9E4F);
@@ -2792,12 +2941,11 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
       height: 52,
       child: OutlinedButton.icon(
         onPressed: _openReport,
-        icon: Icon(
-          updating ? Icons.edit_note : Icons.check_circle_outline,
-          size: 20,
-        ),
+        // A send icon, not a check: sending the report doesn't resolve the
+        // incident — MDRRMO does, when it approves the report (item 50).
+        icon: Icon(updating ? Icons.edit_note : Icons.send_outlined, size: 20),
         label: Text(
-          updating ? 'UPDATE REPORT' : 'SUBMIT REPORT',
+          updating ? 'UPDATE & SEND REPORT' : 'SUBMIT REPORT',
           style: const TextStyle(
             fontSize: 15,
             fontWeight: FontWeight.bold,
@@ -2844,7 +2992,7 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
                   ),
                   TextSpan(text: reason),
                   const TextSpan(
-                    text: '\nUpdate it, then submit it as Final again.',
+                    text: '\nFix it, then send it to MDRRMO again.',
                   ),
                 ],
               ),
@@ -2909,7 +3057,8 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
     );
   }
 
-  /// Small amber note under the report button while the report is Initial.
+  /// Small amber note under the report button while a saved report hasn't
+  /// been sent to MDRRMO.
   Widget _initialReportNote(String text) {
     return Container(
       width: double.infinity,
@@ -2978,11 +3127,11 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
   String get _coordsText =>
       '${_lat.toStringAsFixed(5)}, ${_lng.toStringAsFixed(5)}';
 
-  /// Where it stands: Awaiting Responder, Responding, Under Review,
-  /// Resolved.
+  /// Where it stands: Awaiting Responder, Responding, For Review (the
+  /// team's report is with MDRRMO — not resolved yet), Resolved.
   String get _stageText {
     if (_isResolved) return 'Resolved';
-    if (_isUnderReview) return 'Under Review';
+    if (_isUnderReview) return 'For Review';
     if (_hasResponders) {
       return _responders.length == 1
           ? 'Responding'
@@ -3001,24 +3150,34 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
           : 'pending'] ??
       Colors.grey;
 
-  /// The team's MDRRMC report in one line: what kind, and when.
+  /// The team's MDRRMC report in one line: what kind, and where it is.
+  /// Since item 49 the team sends only the Initial report; a Final one is
+  /// from before that.
   String? get _reportLine {
+    final report = incident['report_data'];
+    final String kind = report is Map && report['report_type'] == 'final'
+        ? 'Final report'
+        : 'Initial report';
     if (_isUnderReview) {
       final at = _formatDateTime(incident['report_submitted_at']?.toString());
       return at.isEmpty
-          ? 'Final report sent · MDRRMO is reviewing it'
-          : 'Final report sent $at · MDRRMO is reviewing it';
+          ? '$kind sent · For Review with MDRRMO'
+          : '$kind sent $at · For Review with MDRRMO';
     }
-    final report = incident['report_data'];
     if (report is! Map) return null;
     if (_returnReason != null) {
-      return 'Sent back by MDRRMO · update it and send it as Final';
+      return 'Sent back by MDRRMO · fix it and send it again';
+    }
+    if (_isResolved) {
+      return report['edited_by'] != null
+          ? '$kind · approved by MDRRMO, with corrections'
+          : '$kind · approved by MDRRMO';
     }
     final at = _formatDateTime(report['updated_at']?.toString());
     if (report['report_type'] == 'initial') {
       return at.isEmpty
-          ? 'Initial report'
-          : 'Initial report · last updated $at';
+          ? 'Initial report · saved, not sent to MDRRMO yet'
+          : 'Initial report · saved $at, not sent to MDRRMO yet';
     }
     return at.isEmpty ? 'Final report' : 'Final report · sent $at';
   }
@@ -3827,10 +3986,9 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
                 // Resolved first: regardless of whether this responder
                 // ever joined, once the incident is closed out there is
                 // nothing left to do here — no navigating, no accepting/
-                // declining. Shown instead of either action-button set
-                // below. The one exception: an admin closed the incident
-                // while the team's report was still Initial — the team
-                // can still finish it as Final.
+                // declining, and the report can't be changed (MDRRMO
+                // approved it). Shown instead of either action-button set
+                // below.
                 if (_isResolved) ...[
                   Container(
                     width: double.infinity,
@@ -3864,18 +4022,10 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
                     const SizedBox(height: 12),
                     _viewReportButton(const Color(0xFF2E7D32)),
                   ],
-                  if (_iHaveJoined && _hasInitialReport) ...[
-                    const SizedBox(height: 12),
-                    _initialReportNote(
-                      'Your report is still Initial. Update it and submit '
-                      'it as Final to finish it.',
-                    ),
-                    const SizedBox(height: 12),
-                    _reportButton(),
-                  ],
                 ] else if (_isUnderReview) ...[
-                  // Final report sent — MDRRMO checks it, then marks the
-                  // incident resolved or sends the report back.
+                  // For Review: report sent — MDRRMO checks it (and may
+                  // correct it), then marks the incident resolved or sends
+                  // the report back. Not resolved until then (item 50).
                   Container(
                     width: double.infinity,
                     padding: const EdgeInsets.symmetric(
@@ -3887,23 +4037,44 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
                       borderRadius: BorderRadius.circular(16),
                     ),
                     child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: const [
-                        Icon(
-                          Icons.hourglass_top_rounded,
-                          color: Color(0xFF6D28D9),
-                          size: 20,
+                        Padding(
+                          padding: EdgeInsets.only(top: 1),
+                          child: Icon(
+                            Icons.hourglass_top_rounded,
+                            color: Color(0xFF6D28D9),
+                            size: 20,
+                          ),
                         ),
                         SizedBox(width: 10),
                         Expanded(
-                          child: Text(
-                            'Final report sent. MDRRMO is reviewing it '
-                            'before the incident is marked resolved.',
-                            style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                              color: Color(0xFF5B21B6),
-                              height: 1.35,
-                            ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'For Review',
+                                style: TextStyle(
+                                  fontSize: 14.5,
+                                  fontWeight: FontWeight.bold,
+                                  color: Color(0xFF5B21B6),
+                                  letterSpacing: 0.3,
+                                ),
+                              ),
+                              SizedBox(height: 3),
+                              Text(
+                                'Report sent. Not resolved yet — MDRRMO is '
+                                'checking your report (they may correct it) '
+                                'and marks the incident resolved when they '
+                                'approve it.',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w500,
+                                  color: Color(0xFF5B21B6),
+                                  height: 1.35,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ],
@@ -4006,9 +4177,9 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
                   ] else if (_hasInitialReport) ...[
                     const SizedBox(height: 12),
                     _initialReportNote(
-                      'Initial report filed. Keep it updated as details '
-                      'come in, then submit it as Final — MDRRMO reviews '
-                      'it, then closes the incident.',
+                      'Your Initial report is saved but not sent to MDRRMO '
+                      'yet. Send it with UPDATE & SEND REPORT — MDRRMO '
+                      'reviews it, then closes the incident.',
                     ),
                   ],
                 ] else ...[
