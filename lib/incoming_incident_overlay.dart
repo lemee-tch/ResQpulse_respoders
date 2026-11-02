@@ -12,10 +12,15 @@ class IncomingIncidentOverlay extends StatelessWidget {
     required this.body,
     required this.onDismiss,
     required this.onView,
+    this.label = 'INCOMING INCIDENT',
   });
 
   final String title;
   final String body;
+
+  /// Above the title: "INCOMING INCIDENT", or "BACKUP NEEDED" when MDRRMO
+  /// sends the team as backup (item 55).
+  final String label;
   final VoidCallback onDismiss;
   final VoidCallback onView;
 
@@ -45,9 +50,9 @@ class IncomingIncidentOverlay extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 24),
-                const Text(
-                  'INCOMING INCIDENT',
-                  style: TextStyle(
+                Text(
+                  label,
+                  style: const TextStyle(
                     color: Colors.white70,
                     fontSize: 14,
                     fontWeight: FontWeight.w600,

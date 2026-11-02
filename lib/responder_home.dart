@@ -1295,6 +1295,40 @@ String _timeAgo(String? iso) {
   return diff.inDays == 1 ? '1 day ago' : '${diff.inDays} days ago';
 }
 
+/// The response teams MDRRMO can send, in its order (Incident::TEAMS on the
+/// server) — for Request Backup (item 55).
+const Map<String, String> _responseTeams = {
+  'BFP': 'Bureau of Fire Protection',
+  'PNP': 'Philippine National Police',
+  'SARS': 'Search and Rescue',
+  'HCU': 'Health Care Unit',
+};
+
+/// The team codes in an API list (teams / sent_teams), in MDRRMO's order.
+List<String> _teamCodes(dynamic raw) {
+  final Set<String> picked = raw is List
+      ? raw.map((e) => e.toString()).toSet()
+      : <String>{};
+  return _responseTeams.keys.where(picked.contains).toList();
+}
+
+/// "SARS", "SARS and HCU", "BFP, SARS and HCU".
+String _joinTeams(List<String> teams) {
+  if (teams.length <= 1) return teams.isEmpty ? '' : teams.first;
+  return '${teams.sublist(0, teams.length - 1).join(', ')} and ${teams.last}';
+}
+
+/// "10:42 PM" — an API timestamp as Manila time, like [_formatDateTime].
+String _clockTime(String? iso) {
+  if (iso == null) return '';
+  final utc = DateTime.tryParse(iso)?.toUtc();
+  if (utc == null) return '';
+  final manila = utc.add(const Duration(hours: 8));
+  final hour12 = manila.hour % 12 == 0 ? 12 : manila.hour % 12;
+  final minute = manila.minute.toString().padLeft(2, '0');
+  return '$hour12:$minute ${manila.hour >= 12 ? 'PM' : 'AM'}';
+}
+
 const List<String> _months = [
   'Jan',
   'Feb',
@@ -1857,6 +1891,30 @@ class _IncidentRowCard extends StatelessWidget {
     final List<Map<String, dynamic>> responders = respondersRaw
         .map((e) => Map<String, dynamic>.from(e as Map))
         .toList();
+    // Backup (item 55): MDRRMO sent your team as backup, or the latest
+    // request from the team on it.
+    final bool backupCall = incident['backup_call'] is Map;
+    final List<dynamic> backups = incident['backup_requests'] is List
+        ? incident['backup_requests'] as List
+        : const [];
+    final Map<dynamic, dynamic>? lastBackup =
+        backups.isNotEmpty && backups.last is Map ? backups.last as Map : null;
+    final bool activeHere = status == 'pending' || status == 'responding';
+    final String? backupLine = !activeHere
+        ? null
+        : backupCall
+        ? 'Backup needed — MDRRMO sent your team'
+        : lastBackup?['status'] == 'waiting'
+        ? 'Backup requested · waiting for MDRRMO'
+        : lastBackup?['status'] == 'sent'
+        ? 'Backup on the way: '
+              '${_joinTeams(_teamCodes(lastBackup?['sent_teams']))}'
+        : null;
+    final Color backupColor = backupCall
+        ? const Color(0xFFC2410C)
+        : lastBackup?['status'] == 'sent'
+        ? const Color(0xFF2E7D32)
+        : const Color(0xFFB45309);
 
     return GestureDetector(
       onTap: onTap,
@@ -1999,6 +2057,31 @@ class _IncidentRowCard extends StatelessWidget {
                               fontSize: 11,
                               fontWeight: FontWeight.w600,
                               color: Color(0xFF2E7D32),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                  if (backupLine != null) ...[
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.group_add_rounded,
+                          size: 13,
+                          color: backupColor,
+                        ),
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: Text(
+                            backupLine,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: backupColor,
                             ),
                           ),
                         ),
@@ -2763,6 +2846,29 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
   void initState() {
     super.initState();
     _loadMyResponderId();
+    // A push about an incident (e.g. MDRRMO answered a backup request, item
+    // 55): show the latest here too.
+    IncidentAlertService.incidentPushes.addListener(_refreshFromServer);
+  }
+
+  @override
+  void dispose() {
+    IncidentAlertService.incidentPushes.removeListener(_refreshFromServer);
+    super.dispose();
+  }
+
+  /// Reads this incident again from the server (the same list Home uses).
+  /// Leaves the screen as it is when it isn't in the list anymore (its
+  /// report went to MDRRMO, or it was resolved) or there's no connection.
+  Future<void> _refreshFromServer() async {
+    final result = await ApiService.getAssignedIncidents();
+    if (!mounted || !result.success || result.data is! List) return;
+    for (final item in result.data as List) {
+      if (item is Map && '${item['id']}' == '${incident['id']}') {
+        setState(() => incident = Map<String, dynamic>.from(item));
+        return;
+      }
+    }
   }
 
   Future<void> _loadMyResponderId() async {
@@ -2850,6 +2956,87 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
   String? get _mdrrmoNotes {
     final notes = (incident['assignment_notes'] ?? '').toString().trim();
     return notes.isEmpty ? null : notes;
+  }
+
+  // ── Backup (item 55) ──────────────────────────────────────────────
+  // The team on scene asks MDRRMO for backup (REQUEST BACKUP); MDRRMO
+  // sends teams or says why it can't, and can send backup on its own.
+  // The server sends every request with the incident (backup_requests,
+  // oldest first), and, for a responder MDRRMO sent as backup who isn't
+  // on it yet, backup_call.
+
+  List<Map<String, dynamic>> get _backupRequests {
+    final raw = incident['backup_requests'];
+    if (raw is! List) return [];
+    return raw
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+  }
+
+  /// The latest backup request — its status is shown to the team on it.
+  Map<String, dynamic>? get _latestBackup =>
+      _backupRequests.isEmpty ? null : _backupRequests.last;
+
+  /// MDRRMO hasn't answered the team's request yet (one at a time).
+  bool get _backupWaiting =>
+      _backupRequests.any((b) => b['status'] == 'waiting');
+
+  /// MDRRMO sent this responder's team as backup: who's on scene, what's
+  /// needed, when. Null when they're on it already.
+  Map<String, dynamic>? get _backupCall {
+    final raw = incident['backup_call'];
+    return raw is Map ? Map<String, dynamic>.from(raw) : null;
+  }
+
+  /// Someone on the incident can ask for backup while it's being
+  /// responded to.
+  bool get _canRequestBackup =>
+      _iHaveJoined &&
+      !_isMswd &&
+      !_isResolved &&
+      !_isUnderReview &&
+      incident['status'] == 'responding';
+
+  /// REQUEST BACKUP: which team(s) and what's needed, sent to MDRRMO
+  /// ([_BackupRequestSheet]).
+  Future<void> _openBackupSheet() async {
+    final int? incidentId = incident['id'] is int
+        ? incident['id'] as int
+        : int.tryParse('${incident['id']}');
+    if (incidentId == null) return;
+
+    final Map<String, dynamic>? result =
+        await showModalBottomSheet<Map<String, dynamic>>(
+          context: context,
+          isScrollControlled: true,
+          backgroundColor: Colors.white,
+          shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+          ),
+          builder: (_) =>
+              _BackupRequestSheet(incidentId: incidentId, myAgency: _myAgency),
+        );
+    if (!mounted || result == null) return;
+
+    if (result['incident'] is Map) {
+      setState(
+        () => incident = Map<String, dynamic>.from(result['incident'] as Map),
+      );
+    }
+    final bool alreadyWaiting = result['already_waiting'] == true;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          result['message']?.toString() ??
+              'Backup requested. MDRRMO will send a team and let you know.',
+        ),
+        backgroundColor: alreadyWaiting
+            ? Colors.orange[800]
+            : const Color(0xFF2E7D32),
+        duration: const Duration(seconds: 5),
+      ),
+    );
   }
 
   /// A report is saved on the incident but not with MDRRMO: one MDRRMO sent
@@ -3084,6 +3271,202 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  /// The latest backup request and MDRRMO's answer, for the team on it
+  /// (item 55): waiting, on the way, or can't send.
+  Widget _backupStatus(Map<String, dynamic> backup) {
+    final String status = (backup['status'] ?? '').toString();
+    final List<String> asked = _teamCodes(backup['teams']);
+    final List<String> sent = _teamCodes(backup['sent_teams']);
+    final String? needs = _textOrNull(backup['needs']);
+    final String? reply = _textOrNull(backup['reply']);
+    final String? askedBy = _textOrNull(backup['requested_by']);
+    final String askedAt = _clockTime(backup['created_at']?.toString());
+    final String answeredAt = _clockTime(backup['handled_at']?.toString());
+
+    final Color background;
+    final Color border;
+    final Color ink;
+    final IconData icon;
+    final String title;
+    final List<String> lines;
+    if (status == 'sent') {
+      background = const Color(0xFFE8F5E9);
+      border = const Color(0xFF81C784);
+      ink = const Color(0xFF1B5E20);
+      icon = Icons.group_add_rounded;
+      title = 'Backup on the way — ${_joinTeams(sent)}';
+      lines = [
+        'MDRRMO sent them${answeredAt.isEmpty ? '' : ' at $answeredAt'}. '
+            'They show in the team list when they join.',
+        if (needs != null) 'Needed: $needs',
+      ];
+    } else if (status == 'declined') {
+      background = const Color(0xFFFFEBEE);
+      border = const Color(0xFFEF9A9A);
+      ink = const Color(0xFFB71C1C);
+      icon = Icons.info_outline_rounded;
+      title = "MDRRMO can't send backup right now";
+      lines = [
+        reply ?? 'Call MDRRMO for help.',
+        'You asked for ${_joinTeams(asked)}'
+            '${answeredAt.isEmpty ? '' : ' · answered $answeredAt'}.',
+      ];
+    } else {
+      background = const Color(0xFFFFF7ED);
+      border = const Color(0xFFFDBA74);
+      ink = const Color(0xFF9A3412);
+      icon = Icons.hourglass_top_rounded;
+      title = 'Backup requested — waiting for MDRRMO';
+      lines = [
+        '${askedBy ?? 'Your team'} asked for ${_joinTeams(asked)}'
+            '${askedAt.isEmpty ? '' : ' at $askedAt'}.',
+        if (needs != null) '“$needs”',
+      ];
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: border),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: ink, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.bold,
+                    color: ink,
+                  ),
+                ),
+                for (final line in lines) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    line,
+                    style: const TextStyle(
+                      fontSize: 12.5,
+                      color: Color(0xFF3E2723),
+                      height: 1.35,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// At the top, for a team MDRRMO sent as backup that isn't on it yet
+  /// (item 55): who's on scene and what's needed. JOIN AS BACKUP is below.
+  Widget _backupCallBanner(Map<String, dynamic> call) {
+    final String? lead = _textOrNull(call['lead']);
+    final String? needs = _textOrNull(call['needs']);
+    final String sentAt = _clockTime(call['sent_at']?.toString());
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF7ED),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFEA580C), width: 1.4),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(
+            Icons.group_add_rounded,
+            color: Color(0xFFEA580C),
+            size: 22,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'MDRRMO needs your team as backup',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFFC2410C),
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  '${lead ?? 'A team'} is on scene.'
+                  '${sentAt.isEmpty ? '' : ' Sent $sentAt.'}',
+                  style: const TextStyle(
+                    fontSize: 12.5,
+                    color: Color(0xFF3E2723),
+                    height: 1.35,
+                  ),
+                ),
+                if (needs != null) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    'Needed: $needs',
+                    style: const TextStyle(
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF1A1A2E),
+                      height: 1.35,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 3),
+                Text(
+                  'Tap JOIN AS BACKUP below to go.',
+                  style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// REQUEST BACKUP — for the team on it (item 55).
+  Widget _requestBackupButton({required bool again}) {
+    const Color orange = Color(0xFFEA580C);
+    return SizedBox(
+      width: double.infinity,
+      height: 52,
+      child: OutlinedButton.icon(
+        onPressed: _openBackupSheet,
+        icon: const Icon(Icons.group_add_outlined, size: 20),
+        label: Text(
+          again ? 'REQUEST MORE BACKUP' : 'REQUEST BACKUP',
+          style: const TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 0.6,
+          ),
+        ),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: orange,
+          side: const BorderSide(color: orange, width: 1.5),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(30),
+          ),
+        ),
       ),
     );
   }
@@ -3859,6 +4242,15 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
                   _mdrrmoNote(_mdrrmoNotes!),
                   const SizedBox(height: 16),
                 ],
+                // MDRRMO sent this team as backup (item 55).
+                if (_backupCall != null &&
+                    !_iHaveJoined &&
+                    !_isMswd &&
+                    !_isResolved &&
+                    !_isUnderReview) ...[
+                  _backupCallBanner(_backupCall!),
+                  const SizedBox(height: 16),
+                ],
 
                 // ── Where ──
                 _DetailSection(
@@ -4182,6 +4574,17 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
                       'reviews it, then closes the incident.',
                     ),
                   ],
+                  // Backup (item 55): the latest request and MDRRMO's
+                  // answer, and REQUEST BACKUP — one request waits at a
+                  // time.
+                  if (_latestBackup != null) ...[
+                    const SizedBox(height: 12),
+                    _backupStatus(_latestBackup!),
+                  ],
+                  if (_canRequestBackup && !_backupWaiting) ...[
+                    const SizedBox(height: 12),
+                    _requestBackupButton(again: _latestBackup != null),
+                  ],
                 ] else ...[
                   SizedBox(
                     width: double.infinity,
@@ -4258,6 +4661,382 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Request Backup (item 55): the team on scene says which team(s) they need
+/// and what for, and it's sent to MDRRMO (ApiService.requestBackup). Closes
+/// with the server's reply — message and the incident; already_waiting
+/// when a request was already waiting for MDRRMO.
+class _BackupRequestSheet extends StatefulWidget {
+  final int incidentId;
+
+  /// This responder's team: "More of your team" on its choice.
+  final String? myAgency;
+
+  const _BackupRequestSheet({required this.incidentId, this.myAgency});
+
+  @override
+  State<_BackupRequestSheet> createState() => _BackupRequestSheetState();
+}
+
+class _BackupRequestSheetState extends State<_BackupRequestSheet> {
+  static const Color _orange = Color(0xFFEA580C);
+  static const Color _ink = Color(0xFF1A1A2E);
+
+  /// Quick picks for what's needed — tapping one adds it to the text.
+  static const List<String> _quickNeeds = [
+    'More people',
+    'Medical help for the injured',
+    'Rescue tools',
+    'Another fire truck',
+    'Traffic and crowd control',
+  ];
+
+  final Set<String> _teams = {};
+  final TextEditingController _needs = TextEditingController();
+  bool _sending = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _needs.dispose();
+    super.dispose();
+  }
+
+  void _addNeed(String need) {
+    final String text = _needs.text.trim();
+    if (text.toLowerCase().contains(need.toLowerCase())) return;
+    final String next = text.isEmpty
+        ? need
+        : '$text, ${need[0].toLowerCase()}${need.substring(1)}';
+    _needs.value = TextEditingValue(
+      text: next,
+      selection: TextSelection.collapsed(offset: next.length),
+    );
+    setState(() => _error = null);
+  }
+
+  Future<void> _send() async {
+    final String needs = _needs.text.trim();
+    if (_teams.isEmpty) {
+      setState(() => _error = 'Choose the team you need.');
+      return;
+    }
+    if (needs.length < 3) {
+      setState(
+        () => _error = 'Say what you need, e.g. more people or rescue tools.',
+      );
+      return;
+    }
+
+    setState(() {
+      _sending = true;
+      _error = null;
+    });
+
+    final result = await ApiService.requestBackup(
+      widget.incidentId,
+      // In the order MDRRMO lists the teams.
+      teams: _responseTeams.keys.where(_teams.contains).toList(),
+      needs: needs,
+    );
+    if (!mounted) return;
+
+    final data = result.data;
+    if (result.success) {
+      Navigator.pop(
+        context,
+        data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{},
+      );
+      return;
+    }
+    // One is already waiting: close, and the screen shows that one.
+    if (result.statusCode == 409 && data is Map && data['incident'] is Map) {
+      Navigator.pop(context, {
+        ...Map<String, dynamic>.from(data),
+        'already_waiting': true,
+      });
+      return;
+    }
+    setState(() {
+      _sending = false;
+      _error = result.error ?? 'Could not request backup. Please try again.';
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.of(context).viewInsets.bottom,
+      ),
+      child: SafeArea(
+        top: false,
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(20, 10, 20, 20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.grey[300],
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFEDD5),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(
+                      Icons.group_add_rounded,
+                      color: _orange,
+                      size: 22,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Text(
+                      'Request backup',
+                      style: TextStyle(
+                        fontSize: 19,
+                        fontWeight: FontWeight.bold,
+                        color: _ink,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'MDRRMO gets your request right away and sends a team. '
+                "You'll get a notification when they answer.",
+                style: TextStyle(
+                  fontSize: 13,
+                  color: Colors.grey[600],
+                  height: 1.4,
+                ),
+              ),
+              const SizedBox(height: 18),
+              const Text(
+                'Which team do you need?',
+                style: TextStyle(
+                  fontSize: 13.5,
+                  fontWeight: FontWeight.bold,
+                  color: _ink,
+                ),
+              ),
+              const SizedBox(height: 8),
+              GridView.count(
+                crossAxisCount: 2,
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                mainAxisSpacing: 8,
+                crossAxisSpacing: 8,
+                childAspectRatio: 2.9,
+                children: [
+                  for (final team in _responseTeams.entries)
+                    _teamChoice(team.key, team.value),
+                ],
+              ),
+              const SizedBox(height: 18),
+              const Text(
+                'What do you need?',
+                style: TextStyle(
+                  fontSize: 13.5,
+                  fontWeight: FontWeight.bold,
+                  color: _ink,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final need in _quickNeeds)
+                    ActionChip(
+                      label: Text(need),
+                      onPressed: _sending ? null : () => _addNeed(need),
+                      labelStyle: const TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF9A3412),
+                      ),
+                      backgroundColor: const Color(0xFFFFF7ED),
+                      side: const BorderSide(color: Color(0xFFFED7AA)),
+                      shape: const StadiumBorder(),
+                      visualDensity: VisualDensity.compact,
+                    ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: _needs,
+                enabled: !_sending,
+                maxLength: 255,
+                minLines: 2,
+                maxLines: 4,
+                textCapitalization: TextCapitalization.sentences,
+                onChanged: (_) {
+                  if (_error != null) setState(() => _error = null);
+                },
+                decoration: InputDecoration(
+                  hintText: 'e.g. Two people trapped — bring rescue tools.',
+                  hintStyle: TextStyle(color: Colors.grey[400], fontSize: 14),
+                  filled: true,
+                  fillColor: const Color(0xFFF7F8FA),
+                  contentPadding: const EdgeInsets.all(14),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: Colors.grey[300]!),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: Colors.grey[300]!),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: const BorderSide(color: _orange, width: 1.6),
+                  ),
+                ),
+              ),
+              if (_error != null) ...[
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(
+                      Icons.error_outline,
+                      color: Color(0xFFDC2626),
+                      size: 18,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        _error!,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFFDC2626),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+              ],
+              const SizedBox(height: 4),
+              SizedBox(
+                width: double.infinity,
+                height: 52,
+                child: ElevatedButton.icon(
+                  onPressed: _sending ? null : _send,
+                  icon: _sending
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2.2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Icon(Icons.send_rounded, size: 20),
+                  label: Text(
+                    _sending ? 'SENDING…' : 'SEND REQUEST',
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 0.6,
+                    ),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _orange,
+                    disabledBackgroundColor: _orange.withOpacity(0.6),
+                    foregroundColor: Colors.white,
+                    disabledForegroundColor: Colors.white,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(30),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// One team to tick: its code and name — "More of your team" on yours.
+  Widget _teamChoice(String code, String name) {
+    final bool picked = _teams.contains(code);
+    final bool mine = code == widget.myAgency;
+    return InkWell(
+      onTap: _sending
+          ? null
+          : () => setState(() {
+              picked ? _teams.remove(code) : _teams.add(code);
+              _error = null;
+            }),
+      borderRadius: BorderRadius.circular(12),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        decoration: BoxDecoration(
+          color: picked ? const Color(0xFFFFF7ED) : Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: picked ? _orange : const Color(0xFFE0E3EA),
+            width: picked ? 1.8 : 1.2,
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              picked
+                  ? Icons.check_box_rounded
+                  : Icons.check_box_outline_blank_rounded,
+              color: picked ? _orange : Colors.grey[400],
+              size: 22,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    code,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w800,
+                      color: _ink,
+                    ),
+                  ),
+                  Text(
+                    mine ? 'More of your team' : name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

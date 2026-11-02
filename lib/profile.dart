@@ -273,7 +273,7 @@ class _ResponderProfileScreenState extends State<ResponderProfileScreen> {
                           const SizedBox(height: 18),
                           Center(
                             child: Text(
-                              'ResQPulse Responder · v1.0.0',
+                              'Resqponder · v1.0.0',
                               style: TextStyle(
                                 fontSize: 11.5,
                                 color: Colors.grey[400],

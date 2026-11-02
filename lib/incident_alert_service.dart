@@ -19,12 +19,18 @@ import 'incoming_incident_overlay.dart';
 /// its data (PushNotificationService on the admin side):
 ///
 ///   type=incident  a report or SOS sent to the team (incident_id says
-///                  which) — rings, with the full-screen alert
+///                  which) — rings, with the full-screen alert. kind=backup:
+///                  MDRRMO sent the team as backup ("🆘 Backup needed",
+///                  item 55)
 ///   type=report    MDRRMO approved or sent back the team's report
+///   type=backup    MDRRMO answered the team's backup request: backup is on
+///                  the way, or it can't send any (item 55)
 ///   type=alert     a disaster alert from Alerts & Broadcast
 ///
-/// The last two show as a normal notification. Before, every push rang as
-/// "INCOMING INCIDENT", disaster alerts included.
+/// The last three show as a normal notification. Before, every push rang as
+/// "INCOMING INCIDENT", disaster alerts included. A backup answer also
+/// makes the lists and an open incident reload ([incidentPushes]), and
+/// tapping it opens the incident.
 ///
 /// While the app is open, Firebase hands every push to onMessage and shows
 /// nothing itself, so this shows it. When the app is in the background or
@@ -127,7 +133,16 @@ class IncidentAlertService {
         android: AndroidInitializationSettings('@mipmap/ic_launcher'),
         iOS: DarwinInitializationSettings(),
       ),
-      onDidReceiveNotificationResponse: (_) => _stopRinging(),
+      onDidReceiveNotificationResponse: (response) {
+        _stopRinging();
+        // A backup answer shown while the app was open: open the incident.
+        final payload = response.payload ?? '';
+        if (payload.startsWith('incident:')) {
+          incidentToOpen.value =
+              int.tryParse(payload.substring('incident:'.length)) ??
+              anyIncident;
+        }
+      },
     );
 
     await FirebaseMessaging.instance.requestPermission(
@@ -158,6 +173,10 @@ class IncidentAlertService {
   static int _incidentIdOf(RemoteMessage message) =>
       int.tryParse('${message.data['incident_id'] ?? ''}') ?? anyIncident;
 
+  /// MDRRMO answered the team's backup request (item 55).
+  static bool _isBackupAnswer(RemoteMessage message) =>
+      message.data['type']?.toString() == 'backup';
+
   static Future<void> _handleMessage(RemoteMessage message) async {
     // A phone that's signed out doesn't ring or show anything.
     if (!await ApiService.isResponderLoggedIn()) return;
@@ -166,6 +185,7 @@ class IncidentAlertService {
     final body = message.notification?.body ?? 'A new incident was reported.';
 
     if (!_isIncident(message)) {
+      final bool backup = _isBackupAnswer(message);
       await _localNotifications.show(
         _notificationId++,
         title,
@@ -179,7 +199,10 @@ class IncidentAlertService {
             priority: Priority.high,
           ),
         ),
+        payload: backup ? 'incident:${_incidentIdOf(message)}' : null,
       );
+      // The incident shows MDRRMO's answer right away.
+      if (backup) incidentPushes.value++;
       return;
     }
 
@@ -201,6 +224,10 @@ class IncidentAlertService {
       pageBuilder: (dialogContext, _, __) => IncomingIncidentOverlay(
         title: title,
         body: body,
+        // MDRRMO sent the team as backup (item 55).
+        label: message.data['kind']?.toString() == 'backup'
+            ? 'BACKUP NEEDED'
+            : 'INCOMING INCIDENT',
         onDismiss: () {
           _stopRinging();
           Navigator.of(dialogContext).pop();
@@ -216,7 +243,7 @@ class IncidentAlertService {
 
   static void _openFromNotification(RemoteMessage message) {
     _stopRinging();
-    if (_isIncident(message)) {
+    if (_isIncident(message) || _isBackupAnswer(message)) {
       incidentToOpen.value = _incidentIdOf(message);
     }
   }

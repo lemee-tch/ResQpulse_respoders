@@ -48,6 +48,8 @@ dependencies:
   image_picker: ^1.1.2
   flutter_local_notifications: ^17.2.3
   audioplayers: ^6.7.1
+  # The splash screen (item 51) — see flutter_native_splash: below.
+  flutter_native_splash: ^2.4.7
 
 dev_dependencies:
   flutter_test:
@@ -55,15 +57,34 @@ dev_dependencies:
   flutter_lints: ^6.0.0
   flutter_launcher_icons: ^0.14.1
 
+# The app icon (item 51): the logo. Made by running, in this folder:
+#   dart run flutter_launcher_icons
 flutter_launcher_icons:
   android: true
   ios: true
   image_path: "assets/logo.png"
-  # Android 13+ adaptive icon — reuses the same source image on a plain
-  # background rather than needing a second separate asset.
-  adaptive_icon_background: "#0D1B4C"
+  # Android 8+ adaptive icon — reuses the same source image on a plain
+  # background rather than needing a second separate asset. White, like the
+  # logo's own circle (item 51).
+  adaptive_icon_background: "#FFFFFF"
   adaptive_icon_foreground: "assets/logo.png"
   remove_alpha_ios: true
+
+# The splash screen (item 51): navy with the logo. Made by running:
+#   dart run flutter_native_splash:create
+# It stays up until the app knows whether to open Login or Home
+# (main.dart and auth_wrapper.dart).
+flutter_native_splash:
+  color: "#0D1B4C"
+  # Android 11 and older: the logo in the middle.
+  image: assets/logo.png
+  # Android 12 and later: the phone shows the app's icon (the logo on
+  # white) in the middle of the same navy.
+  android_12:
+    color: "#0D1B4C"
+  android: true
+  ios: false
+  web: false
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

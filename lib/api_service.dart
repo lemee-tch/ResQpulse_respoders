@@ -355,6 +355,57 @@ class ApiService {
     }
   }
 
+  /// Request Backup (item 55): asks MDRRMO for backup on an incident this
+  /// responder is on — which team(s) ([teams]: BFP / PNP / SARS / HCU) and
+  /// what they need ([needs]). MDRRMO sends a team or says why it can't,
+  /// and the team gets a notification either way
+  /// (POST /responder/incidents/{id}/backup, Api\IncidentController::
+  /// requestBackup).
+  ///
+  /// data: message, and the incident with its backup_requests. A request
+  /// already waiting (409) also carries the incident. A 422 message says
+  /// what's missing.
+  static Future<ApiResponse> requestBackup(
+    int incidentId, {
+    required List<String> teams,
+    required String needs,
+  }) async {
+    try {
+      final headers = await _responderAuthHeaders();
+      final response = await http
+          .post(
+            Uri.parse('$baseUrl/responder/incidents/$incidentId/backup'),
+            headers: headers,
+            body: jsonEncode({'teams': teams, 'needs': needs}),
+          )
+          .timeout(const Duration(seconds: 15));
+
+      Map<String, dynamic> data = {};
+      try {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map<String, dynamic>) data = decoded;
+      } catch (_) {
+        // Not JSON (e.g. an older server's 404 page).
+      }
+
+      if (response.statusCode == 201) return ApiResponse.success(data);
+      if (response.statusCode == 404 && data.isEmpty) {
+        return ApiResponse.error(
+          "Requesting backup isn't on the server yet. Call MDRRMO instead.",
+          statusCode: 404,
+        );
+      }
+      return ApiResponse.error(
+        data['message']?.toString() ??
+            'Could not request backup. Please try again.',
+        data: data,
+        statusCode: response.statusCode,
+      );
+    } catch (e) {
+      return ApiResponse.error(_handleError(e));
+    }
+  }
+
   /// Full address of a file on the server's public storage, e.g. the
   /// photo attached to an incident report.
   static String storageUrl(String path) {
