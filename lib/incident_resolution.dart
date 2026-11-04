@@ -263,8 +263,13 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
 
   Future<void> _pickImage(ImageSource source) async {
     try {
+      // Shrunk to 1600 px, like the residents app (item 61): a full-size
+      // photo from a 48–50 MP camera can be over the server's 5 MB limit,
+      // and the report was refused.
       final picked = await ImagePicker().pickImage(
         source: source,
+        maxWidth: 1600,
+        maxHeight: 1600,
         imageQuality: 80,
       );
       if (picked != null && mounted) {
