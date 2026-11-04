@@ -11,12 +11,16 @@ const Color _gradientTop = Color(0xFF00308F);
 const Color _navy = Color(0xFF0D1B4C);
 
 /// Evacuation Centers — read-only for most responders (view where centers
-/// are, their capacity/status, and distance from current position).
+/// are, whether one is full, and distance from current position).
+///
+/// Centers are always open (item 58): there's no "Open" or "Closed", only
+/// a red "Full" tag (and a red pin) on a center MSWD marked full.
 ///
 /// If [isMswd] is true, a floating "+" button is shown that jumps straight
-/// to AddEvacuationCenterScreen, AND the status pill on each card becomes
-/// tappable — MSWD is the only agency allowed to add or update centers
-/// (enforced server-side too), everyone else just gets the read-only list.
+/// to AddEvacuationCenterScreen, AND each card gets Mark Full / Has Room
+/// and Log Evacuee — MSWD is the only agency allowed to add or update
+/// centers (enforced server-side too), everyone else just gets the
+/// read-only list.
 class ResponderEvacuationCentersScreen extends StatefulWidget {
   final bool isMswd;
   const ResponderEvacuationCentersScreen({super.key, this.isMswd = false});
@@ -140,86 +144,76 @@ class _ResponderEvacuationCentersScreenState
         : '${(meters / 1000).toStringAsFixed(1)} km';
   }
 
-  Color _statusColor(String status) {
-    switch (status) {
-      case 'full':
-        return const Color(0xFFD32F2F);
-      case 'closed':
-        return Colors.grey;
-      default:
-        return const Color(0xFF2E7D32);
-    }
-  }
+  /// A full center's red, the rest green (item 58).
+  static const Color _fullRed = Color(0xFFD32F2F);
+  static const Color _pinGreen = Color(0xFF2E7D32);
 
-  /// MSWD-only — matches the admin panel's inline status dropdown
-  /// (evacuation_blade.php). Everyone else's badge stays a plain
-  /// read-only pill; server-side re-checks this gate regardless (see
+  /// MSWD-only: marks a center full when it can't take more evacuees, or
+  /// takes that off once it has room again. Centers are always open
+  /// (item 58), so there's no "Open" or "Closed" to pick. The server
+  /// re-checks the MSWD gate regardless (see
   /// Api\EvacuationCenterController::updateStatus).
-  Future<void> _changeStatus(_EvacCenter center) async {
-    final selected = await showModalBottomSheet<String>(
+  Future<void> _toggleFull(_EvacCenter center) async {
+    final markFull = !center.isFull;
+
+    final confirmed = await showDialog<bool>(
       context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(height: 12),
-            Text(
-              center.name,
-              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Update status',
-              style: TextStyle(color: Colors.grey[600], fontSize: 12.5),
-            ),
-            const SizedBox(height: 8),
-            for (final s in const ['open', 'full', 'closed'])
-              ListTile(
-                leading: Icon(Icons.circle, size: 12, color: _statusColor(s)),
-                title: Text(_statusLabel(s)),
-                trailing: center.status == s
-                    ? const Icon(Icons.check, color: _navy)
-                    : null,
-                onTap: () => Navigator.pop(ctx, s),
-              ),
-            const SizedBox(height: 8),
-          ],
+      builder: (ctx) => AlertDialog(
+        title: Text(
+          markFull
+              ? 'Mark ${center.name} full?'
+              : '${center.name} has room again?',
+          style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
         ),
+        content: Text(
+          markFull
+              ? 'New evacuees can\'t be logged there until you tap Has Room.'
+              : 'Evacuees can be logged there again.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(
+              backgroundColor: markFull ? _fullRed : _gradientTop,
+            ),
+            child: Text(markFull ? 'Mark Full' : 'Has Room'),
+          ),
+        ],
       ),
     );
 
-    if (selected == null || selected == center.status || !mounted) return;
+    if (confirmed != true || !mounted) return;
 
     final result = await ApiService.updateEvacuationCenterStatus(
       center.id,
-      selected,
+      markFull ? 'full' : 'open',
     );
 
     if (!mounted) return;
 
     if (result.success) {
       _loadCenters();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            markFull
+                ? '${center.name} is marked full.'
+                : '${center.name} has room again.',
+          ),
+          backgroundColor: const Color(0xFF2E7D32),
+        ),
+      );
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(result.error ?? 'Could not update status.'),
+          content: Text(result.error ?? 'Could not update the center.'),
           backgroundColor: Colors.redAccent,
         ),
       );
-    }
-  }
-
-  String _statusLabel(String status) {
-    switch (status) {
-      case 'full':
-        return 'Full';
-      case 'closed':
-        return 'Closed';
-      default:
-        return 'Open';
     }
   }
 
@@ -328,7 +322,7 @@ class _ResponderEvacuationCentersScreenState
                                 Icons.location_pin,
                                 color: isSelected
                                     ? _gradientTop
-                                    : _statusColor(center.status),
+                                    : (center.isFull ? _fullRed : _pinGreen),
                                 size: isSelected ? 40 : 32,
                               ),
                             ),
@@ -545,51 +539,29 @@ class _ResponderEvacuationCentersScreenState
                                               ),
                                             ),
                                           ),
-                                          GestureDetector(
-                                            onTap: widget.isMswd
-                                                ? () => _changeStatus(center)
-                                                : null,
-                                            child: Container(
+                                          if (center.isFull)
+                                            Container(
                                               padding:
                                                   const EdgeInsets.symmetric(
                                                     horizontal: 8,
                                                     vertical: 3,
                                                   ),
                                               decoration: BoxDecoration(
-                                                color: _statusColor(
-                                                  center.status,
-                                                ).withOpacity(0.12),
+                                                color: _fullRed.withOpacity(
+                                                  0.12,
+                                                ),
                                                 borderRadius:
                                                     BorderRadius.circular(20),
                                               ),
-                                              child: Row(
-                                                mainAxisSize: MainAxisSize.min,
-                                                children: [
-                                                  Text(
-                                                    _statusLabel(center.status),
-                                                    style: TextStyle(
-                                                      fontSize: 10.5,
-                                                      fontWeight:
-                                                          FontWeight.bold,
-                                                      color: _statusColor(
-                                                        center.status,
-                                                      ),
-                                                    ),
-                                                  ),
-                                                  if (widget.isMswd) ...[
-                                                    const SizedBox(width: 3),
-                                                    Icon(
-                                                      Icons.edit,
-                                                      size: 10,
-                                                      color: _statusColor(
-                                                        center.status,
-                                                      ),
-                                                    ),
-                                                  ],
-                                                ],
+                                              child: const Text(
+                                                'Full',
+                                                style: TextStyle(
+                                                  fontSize: 10.5,
+                                                  fontWeight: FontWeight.bold,
+                                                  color: _fullRed,
+                                                ),
                                               ),
                                             ),
-                                          ),
                                         ],
                                       ),
                                       const SizedBox(height: 2),
@@ -634,26 +606,39 @@ class _ResponderEvacuationCentersScreenState
                                             Expanded(
                                               child: SizedBox(
                                                 height: 34,
+                                                // Mark Full, or Has Room once
+                                                // a full center frees up.
                                                 child: OutlinedButton.icon(
                                                   onPressed: () =>
-                                                      _changeStatus(center),
+                                                      _toggleFull(center),
                                                   icon: Icon(
-                                                    Icons.edit_outlined,
+                                                    center.isFull
+                                                        ? Icons
+                                                              .check_circle_outline
+                                                        : Icons.block,
                                                     size: 15,
-                                                    color: _gradientTop,
+                                                    color: center.isFull
+                                                        ? _gradientTop
+                                                        : _fullRed,
                                                   ),
                                                   label: Text(
-                                                    'Status',
+                                                    center.isFull
+                                                        ? 'Has Room'
+                                                        : 'Mark Full',
                                                     style: TextStyle(
                                                       fontSize: 12.5,
                                                       fontWeight:
                                                           FontWeight.w700,
-                                                      color: _gradientTop,
+                                                      color: center.isFull
+                                                          ? _gradientTop
+                                                          : _fullRed,
                                                     ),
                                                   ),
                                                   style: OutlinedButton.styleFrom(
                                                     side: BorderSide(
-                                                      color: _gradientTop,
+                                                      color: center.isFull
+                                                          ? _gradientTop
+                                                          : _fullRed,
                                                     ),
                                                     padding: EdgeInsets.zero,
                                                     shape: RoundedRectangleBorder(
@@ -672,7 +657,7 @@ class _ResponderEvacuationCentersScreenState
                                                 height: 34,
                                                 // Disabled (onPressed: null)
                                                 // and relabeled once a center
-                                                // is full/closed, so an MSWD
+                                                // is marked full, so an MSWD
                                                 // responder sees it can't be
                                                 // logged here right on the
                                                 // list — before they tap in,
@@ -681,8 +666,8 @@ class _ResponderEvacuationCentersScreenState
                                                 // still re-checks this on
                                                 // submit regardless (see
                                                 // Api\EvacuationCenterController
-                                                // ::storeEvacuee) in case
-                                                // status changes between list
+                                                // ::storeEvacuee) in case it's
+                                                // marked full between list
                                                 // load and submit.
                                                 child: ElevatedButton.icon(
                                                   onPressed:
@@ -713,10 +698,7 @@ class _ResponderEvacuationCentersScreenState
                                                   label: Text(
                                                     center.acceptsEvacuees
                                                         ? 'Log Evacuee'
-                                                        : (center.status ==
-                                                                  'closed'
-                                                              ? 'Closed'
-                                                              : 'Full'),
+                                                        : 'Full',
                                                     style: const TextStyle(
                                                       fontSize: 12.5,
                                                       fontWeight:
@@ -789,12 +771,15 @@ class _EvacCenter {
 
   LatLng get location => LatLng(latitude, longitude);
 
+  /// MSWD marked it full (item 58: centers are always open, so that's the
+  /// only state shown).
+  bool get isFull => status == 'full';
+
   /// Whether this center can take a newly-logged evacuee right now —
-  /// only when a human (MSWD) has it explicitly marked 'open'. 'full'
-  /// and 'closed' both block logging; see
+  /// any center that isn't marked full. See
   /// Api\EvacuationCenterController::storeEvacuee for the server-side
   /// enforcement of the same rule.
-  bool get acceptsEvacuees => status == 'open';
+  bool get acceptsEvacuees => !isFull;
 
   factory _EvacCenter.fromJson(Map<String, dynamic> json) {
     return _EvacCenter(

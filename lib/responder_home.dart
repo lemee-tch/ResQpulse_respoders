@@ -3510,6 +3510,57 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
   String get _coordsText =>
       '${_lat.toStringAsFixed(5)}, ${_lng.toStringAsFixed(5)}';
 
+  /// What the reporter typed in Report Emergency's Landmark box, e.g.
+  /// "Beside the chapel, blue gate" (item 59).
+  String? get _landmark => _textOrNull(incident['landmark']);
+
+  /// How close the reporter's GPS pin is, in meters, as their phone said.
+  /// Null from older apps.
+  int? get _gpsAccuracy {
+    final value = incident['location_accuracy'];
+    final meters = value is num
+        ? value.round()
+        : int.tryParse('${value ?? ''}');
+    return (meters != null && meters > 0) ? meters : null;
+  }
+
+  /// The pin may be off by more than 100 m.
+  bool get _gpsApproximate => (_gpsAccuracy ?? 0) > 100;
+
+  /// How many minutes before the report the phone got its pin, when it had
+  /// to send an older one — 2 or more, else null.
+  int? get _gpsAgeMinutes {
+    final fixed = DateTime.tryParse('${incident['location_fixed_at'] ?? ''}');
+    final created = DateTime.tryParse('${incident['created_at'] ?? ''}');
+    if (fixed == null || created == null) return null;
+    final minutes = created.difference(fixed).inMinutes;
+    return minutes >= 2 ? minutes : null;
+  }
+
+  /// Under the GPS pin: how close it is, and what to do when it's rough or
+  /// old (item 59).
+  String get _gpsNote {
+    final lines = <String>[];
+    final meters = _gpsAccuracy;
+    if (meters != null) {
+      lines.add(
+        _gpsApproximate
+            ? 'Approximate — within about ${_distanceText(meters)}. Call the '
+                  'reporter for the exact spot.'
+            : 'Within about ${_distanceText(meters)}.',
+      );
+    }
+    final age = _gpsAgeMinutes;
+    if (age != null) {
+      lines.add(
+        'From ${_minutesText(age)} before the report — the phone couldn\'t '
+        'get a new one.',
+      );
+    }
+    lines.add('Tap to copy');
+    return lines.join('\n');
+  }
+
   /// Where it stands: Awaiting Responder, Responding, For Review (the
   /// team's report is with MDRRMO — not resolved yet), Resolved.
   String get _stageText {
@@ -4041,8 +4092,10 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
     final lines = <String>[
       '$type${priority.isEmpty ? '' : ' — $priority priority'}',
       (incident['location'] ?? 'Unknown location').toString(),
+      if (_landmark != null) 'Landmark: $_landmark',
       if (_hasCoords)
-        'GPS: $_coordsText (https://maps.google.com/?q=$_lat,$_lng)',
+        'GPS: $_coordsText (https://maps.google.com/?q=$_lat,$_lng)'
+            '${_gpsApproximate ? ' — approximate, within about ${_distanceText(_gpsAccuracy!)}' : ''}',
       'Reported: ${_formatDateTime(incident['created_at']?.toString())}',
       if (_mdrrmoNotes != null) 'MDRRMO: $_mdrrmoNotes',
     ];
@@ -4261,12 +4314,22 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
                       label: 'Address',
                       value: location,
                     ),
+                    if (_landmark != null)
+                      _InfoRow(
+                        icon: Icons.signpost_outlined,
+                        label: 'Landmark',
+                        value: _landmark!,
+                        note: 'From the reporter',
+                      ),
                     if (_hasCoords)
                       _InfoRow(
                         icon: Icons.my_location_rounded,
                         label: 'GPS pin',
                         value: _coordsText,
-                        note: 'Tap to copy',
+                        note: _gpsNote,
+                        noteColor: (_gpsApproximate || _gpsAgeMinutes != null)
+                            ? const Color(0xFFB45309)
+                            : null,
                         onTap: _copyCoords,
                         actionIcon: Icons.copy_rounded,
                         actionColor: const Color(0xFF1565C0),
@@ -5050,6 +5113,9 @@ class _InfoRow extends StatelessWidget {
   /// Grey text under the value: who they are, how sure, what to do…
   final String? note;
 
+  /// The note's color when it's a warning (an approximate GPS pin).
+  final Color? noteColor;
+
   /// Makes the row tappable, with [actionIcon] in a circle at its end — a
   /// call button unless it says otherwise (the GPS pin copies).
   final VoidCallback? onTap;
@@ -5064,6 +5130,7 @@ class _InfoRow extends StatelessWidget {
     required this.label,
     required this.value,
     this.note,
+    this.noteColor,
     this.onTap,
     this.actionIcon = Icons.call,
     this.actionColor = const Color(0xFF2E7D32),
@@ -5117,7 +5184,10 @@ class _InfoRow extends StatelessWidget {
                   note!,
                   style: TextStyle(
                     fontSize: 12.5,
-                    color: Colors.grey[600],
+                    color: noteColor ?? Colors.grey[600],
+                    fontWeight: noteColor == null
+                        ? FontWeight.normal
+                        : FontWeight.w600,
                     height: 1.35,
                   ),
                 ),
@@ -5244,6 +5314,26 @@ class _DetailSection extends StatelessWidget {
 }
 
 /// [value] as trimmed text, or null when it's missing or blank.
+/// "12 m", "250 m", "1.2 km" — how close a GPS pin is (item 59). Same
+/// rounding as the admin panel.
+String _distanceText(int meters) {
+  if (meters >= 1000) {
+    final km = (meters / 1000).toStringAsFixed(1);
+    return '${km.endsWith('.0') ? km.substring(0, km.length - 2) : km} km';
+  }
+  if (meters < 20) return '${meters < 1 ? 1 : meters} m';
+  return '${(meters / 5).round() * 5} m';
+}
+
+/// "12 minutes", "1 hour", "3 hours", "2 days".
+String _minutesText(int minutes) {
+  if (minutes < 60) return minutes == 1 ? '1 minute' : '$minutes minutes';
+  final hours = (minutes / 60).floor();
+  if (hours < 24) return hours == 1 ? '1 hour' : '$hours hours';
+  final days = (hours / 24).floor();
+  return days == 1 ? '1 day' : '$days days';
+}
+
 String? _textOrNull(dynamic value) {
   final text = (value ?? '').toString().trim();
   return text.isEmpty ? null : text;

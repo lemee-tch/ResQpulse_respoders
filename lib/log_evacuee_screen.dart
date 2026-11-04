@@ -21,10 +21,11 @@ const Color _green = Color(0xFF2E9E3F);
 ///
 /// [centerStatus] is passed in from the centers list so this screen knows
 /// right away whether the center can still take evacuees — the list
-/// already hides/disables the "Log Evacuee" button once a center is
-/// full/closed, but status can change in the moment between loading that
-/// list and a responder tapping through, so this screen re-checks it too
-/// and shows a blocking message instead of the form when it's not 'open'.
+/// already disables the "Log Evacuee" button once a center is marked full,
+/// but that can change between loading the list and a responder tapping
+/// through, so this screen re-checks it too and shows a blocking message
+/// instead of the form when it's full. Centers are always open (item 58):
+/// full is the only thing that stops logging.
 /// The backend is the actual authority either way (see
 /// Api\EvacuationCenterController::storeEvacuee) — this is just so a
 /// responder finds out immediately instead of after filling out the form.
@@ -59,7 +60,7 @@ class _LogEvacueeScreenState extends State<LogEvacueeScreen> {
   bool _isSaving = false;
   String? _errorMessage;
 
-  bool get _isOpen => widget.centerStatus == 'open';
+  bool get _hasRoom => widget.centerStatus != 'full';
 
   // Same barangay list used across the app (register.dart,
   // report_incident.dart, add_evacuation.dart, evacuation.blade.php) so
@@ -117,9 +118,9 @@ class _LogEvacueeScreenState extends State<LogEvacueeScreen> {
 
   Future<void> _handleSave() async {
     // Shouldn't be reachable — the form below isn't shown at all when the
-    // center isn't open — but guard anyway, same belt-and-suspenders
+    // center is full — but guard anyway, same belt-and-suspenders
     // pattern as the MSWD-only checks elsewhere in this app.
-    if (!_isOpen) return;
+    if (!_hasRoom) return;
 
     if (!_formKey.currentState!.validate()) return;
     if (_selectedGender == null) {
@@ -208,18 +209,16 @@ class _LogEvacueeScreenState extends State<LogEvacueeScreen> {
           ),
         ),
       ),
-      body: SafeArea(child: !_isOpen ? _buildBlockedState() : _buildForm()),
+      body: SafeArea(child: !_hasRoom ? _buildBlockedState() : _buildForm()),
     );
   }
 
-  /// Shown instead of the form when the center is full or closed —
-  /// there's nothing to fill out if logging isn't possible here, so this
-  /// explains why and sends the responder back to pick another center
-  /// (or update this one's status first) rather than leaving them staring
-  /// at a form that will just fail on submit.
+  /// Shown instead of the form when the center is full — there's nothing
+  /// to fill out if logging isn't possible here, so this explains why and
+  /// sends the responder back to pick another center (or tap Has Room on
+  /// this one first) rather than leaving them staring at a form that
+  /// will just fail on submit.
   Widget _buildBlockedState() {
-    final isClosed = widget.centerStatus == 'closed';
-
     return Center(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 32),
@@ -234,16 +233,14 @@ class _LogEvacueeScreenState extends State<LogEvacueeScreen> {
                 shape: BoxShape.circle,
               ),
               child: Icon(
-                isClosed ? Icons.lock_outline : Icons.people_outline,
+                Icons.people_outline,
                 color: Colors.red[400],
                 size: 34,
               ),
             ),
             const SizedBox(height: 20),
             Text(
-              isClosed
-                  ? '${widget.centerName} is closed'
-                  : '${widget.centerName} is full',
+              '${widget.centerName} is full',
               textAlign: TextAlign.center,
               style: const TextStyle(
                 fontSize: 17,
@@ -253,9 +250,7 @@ class _LogEvacueeScreenState extends State<LogEvacueeScreen> {
             ),
             const SizedBox(height: 8),
             Text(
-              isClosed
-                  ? 'New evacuees can\'t be logged here while this center is marked closed. Pick a different center, or update its status first if it should be open.'
-                  : 'New evacuees can\'t be logged here while this center is marked full. Pick a different center, or update its status once space frees up.',
+              'New evacuees can\'t be logged here while this center is marked full. Pick a different center, or tap Has Room on its card once space frees up.',
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize: 13.5,
