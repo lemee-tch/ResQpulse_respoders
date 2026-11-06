@@ -4,6 +4,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
+import 'map_credits.dart';
 
 /// Shows the SPECIFIC incident location only (single marker — no other
 /// incidents, no evac centers) plus a route line from the responder's
@@ -256,6 +257,8 @@ class _IncidentRouteMapState extends State<IncidentRouteMap> {
                           ),
                       ],
                     ),
+                    // Item 64: the credit OpenStreetMap requires.
+                    const OsmCredit(alignment: Alignment.bottomRight),
                   ],
                 ),
 

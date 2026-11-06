@@ -6,6 +6,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'incident_resolution.dart';
+import 'map_credits.dart';
 
 const Color _navy = Color(0xFF0D1B4C);
 const Color _green = Color(0xFF2E9E3F);
@@ -372,6 +373,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
               child: Row(
                 children: [
                   IconButton(
+                    tooltip: 'Back',
                     icon: const Icon(
                       Icons.arrow_back,
                       color: Color(0xFF1A1A2E),
@@ -500,6 +502,8 @@ class _NavigationScreenState extends State<NavigationScreen> {
                             ),
                         ],
                       ),
+                      // Item 64: the credit OpenStreetMap requires.
+                      const OsmCredit(alignment: Alignment.topRight),
                     ],
                   ),
 

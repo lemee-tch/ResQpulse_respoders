@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
+import 'map_credits.dart';
 
 /// The incidents a screen opened from Home shows, read from Home again each
 /// time its list changes: the incidents, whether they're loading, and the
@@ -254,6 +255,7 @@ class _IncidentLocationsScreenState extends State<IncidentLocationsScreen> {
         backgroundColor: Colors.white,
         elevation: 0,
         leading: IconButton(
+          tooltip: 'Back',
           icon: const Icon(
             Icons.arrow_back_ios_new,
             color: Color(0xFF1A1A2E),
@@ -388,6 +390,8 @@ class _IncidentLocationsScreenState extends State<IncidentLocationsScreen> {
                                   ),
                               ],
                             ),
+                            // Item 64: the credit OpenStreetMap requires.
+                            const OsmCredit(alignment: Alignment.bottomLeft),
                           ],
                         ),
 
@@ -635,6 +639,7 @@ class _IncidentLocationsScreenState extends State<IncidentLocationsScreen> {
                                 ),
                                 const SizedBox(width: 4),
                                 IconButton(
+                                  tooltip: 'Open the incident',
                                   visualDensity: VisualDensity.compact,
                                   padding: EdgeInsets.zero,
                                   constraints: const BoxConstraints(),

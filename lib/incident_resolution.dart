@@ -1000,6 +1000,7 @@ class _IncidentResolutionScreenState extends State<IncidentResolutionScreen> {
         backgroundColor: Colors.white,
         elevation: 0,
         leading: IconButton(
+          tooltip: 'Back',
           icon: const Icon(Icons.arrow_back, color: _ink),
           onPressed: () => Navigator.pop(context),
         ),

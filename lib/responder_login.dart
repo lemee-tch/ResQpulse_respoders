@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'api_service.dart';
+import 'legal.dart';
 import 'responder_home.dart';
 
 const Color _navy = Color(0xFF0D1B4C);
@@ -128,11 +129,15 @@ class _ResponderLoginScreenState extends State<ResponderLoginScreen> {
                   decoration: _inputDecoration(
                     'Password',
                     suffixIcon: IconButton(
+                      // Item 64: screen readers say what the eye does.
+                      tooltip: _obscurePassword
+                          ? 'Show password'
+                          : 'Hide password',
                       icon: Icon(
                         _obscurePassword
                             ? Icons.visibility_off_outlined
                             : Icons.visibility_outlined,
-                        color: Colors.grey[500],
+                        color: Colors.grey[700],
                         size: 22,
                       ),
                       onPressed: () =>
@@ -213,7 +218,19 @@ class _ResponderLoginScreenState extends State<ResponderLoginScreen> {
                   ),
                 ),
 
-                const SizedBox(height: 28),
+                const SizedBox(height: 22),
+                // Item 64: who may use Resqponder, and what logging in
+                // agrees to.
+                const PrivacyNote(
+                  'For authorized MDRRMO Rosales response teams only. By '
+                  'logging in, you agree to the Terms and Conditions and the '
+                  'Privacy Policy, and to keep residents\' information '
+                  'confidential.',
+                  links: [LegalDoc.terms, LegalDoc.privacy],
+                  accent: _navy,
+                ),
+
+                const SizedBox(height: 20),
               ],
             ),
           ),

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'api_service.dart';
+import 'legal.dart';
 
 const Color _navy = Color(0xFF0D1B4C);
 const Color _green = Color(0xFF2E9E3F);
@@ -197,6 +198,7 @@ class _LogEvacueeScreenState extends State<LogEvacueeScreen> {
         backgroundColor: Colors.white,
         elevation: 0,
         leading: IconButton(
+          tooltip: 'Back',
           icon: const Icon(Icons.arrow_back_ios_new, color: _navy, size: 20),
           onPressed: () => Navigator.pop(context),
         ),
@@ -526,7 +528,19 @@ class _LogEvacueeScreenState extends State<LogEvacueeScreen> {
               style: const TextStyle(fontSize: 15, color: Color(0xFF1A1A2E)),
               decoration: _decoration('Optional', Icons.phone_outlined),
             ),
-            const SizedBox(height: 32),
+            const SizedBox(height: 20),
+
+            // Item 64: the evacuee isn't using the app, so the team tells
+            // them what is recorded and why (Data Privacy Act: people must
+            // be told before their information is collected).
+            const PrivacyNote(
+              'Before saving, tell the person: MDRRMO Rosales keeps their '
+              'name, age, sex, barangay and contact number for evacuation and '
+              'relief records, and keeps it private. They can ask MDRRMO to '
+              'see or correct it.',
+              accent: _navy,
+            ),
+            const SizedBox(height: 20),
 
             SizedBox(
               width: double.infinity,

@@ -1459,6 +1459,7 @@ void _openPhotoViewer(
             top: 40,
             right: 16,
             child: IconButton(
+              tooltip: 'Close',
               icon: const Icon(Icons.close, color: Colors.white, size: 28),
               onPressed: () => Navigator.pop(ctx),
             ),
@@ -1677,6 +1678,7 @@ class _IncidentListScreenState extends State<_IncidentListScreen> {
         backgroundColor: Colors.white,
         elevation: 0,
         leading: IconButton(
+          tooltip: 'Back',
           icon: const Icon(
             Icons.arrow_back_ios_new,
             color: Color(0xFF1A1A2E),
@@ -2010,8 +2012,9 @@ class _IncidentRowCard extends StatelessWidget {
                   ),
                   if (aiType != null) ...[
                     const SizedBox(height: 3),
+                    // Item 64: a guess, not a finding.
                     Text(
-                      '✨ AI detected: $aiType',
+                      '✨ AI guess: $aiType',
                       style: const TextStyle(
                         fontSize: 11,
                         color: Color(0xFF4338CA),
@@ -2577,6 +2580,7 @@ class _DisasterAlertsScreenState extends State<_DisasterAlertsScreen> {
         backgroundColor: Colors.white,
         elevation: 0,
         leading: IconButton(
+          tooltip: 'Back',
           icon: const Icon(
             Icons.arrow_back_ios_new,
             color: Color(0xFF1A1A2E),
@@ -4141,6 +4145,7 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
         backgroundColor: Colors.white,
         elevation: 0,
         leading: IconButton(
+          tooltip: 'Back',
           icon: const Icon(
             Icons.arrow_back_ios_new,
             color: Color(0xFF1A1A2E),
@@ -4159,6 +4164,7 @@ class _IncidentDetailScreenState extends State<_IncidentDetailScreen> {
         centerTitle: true,
         actions: [
           IconButton(
+            tooltip: 'Copy for a message',
             icon: const Icon(
               Icons.ios_share_rounded,
               color: Color(0xFF1A1A2E),
@@ -4885,7 +4891,8 @@ class _BackupRequestSheetState extends State<_BackupRequestSheet> {
               ),
               const SizedBox(height: 8),
               Text(
-                'MDRRMO gets your request right away and sends a team. '
+                // Item 64: MDRRMO decides; no promise of a team.
+                'MDRRMO gets your request and decides which teams to send. '
                 "You'll get a notification when they answer.",
                 style: TextStyle(
                   fontSize: 13,

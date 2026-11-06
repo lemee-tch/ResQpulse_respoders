@@ -179,6 +179,7 @@ class _TeamReportScreenState extends State<TeamReportScreen> {
         backgroundColor: Colors.white,
         elevation: 0,
         leading: IconButton(
+          tooltip: 'Back',
           icon: const Icon(Icons.arrow_back_ios_new, color: _ink, size: 20),
           onPressed: () => Navigator.pop(context),
         ),
@@ -585,6 +586,7 @@ class _TeamReportScreenState extends State<TeamReportScreen> {
                 top: 40,
                 right: 16,
                 child: IconButton(
+                  tooltip: 'Close',
                   icon: const Icon(Icons.close, color: Colors.white, size: 28),
                   onPressed: () => Navigator.pop(ctx),
                 ),

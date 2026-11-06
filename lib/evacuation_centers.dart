@@ -6,6 +6,7 @@ import 'package:geolocator/geolocator.dart';
 import 'api_service.dart';
 import 'add_evacuation.dart';
 import 'log_evacuee_screen.dart';
+import 'map_credits.dart';
 
 const Color _gradientTop = Color(0xFF00308F);
 const Color _navy = Color(0xFF0D1B4C);
@@ -235,6 +236,7 @@ class _ResponderEvacuationCentersScreenState
         backgroundColor: Colors.white,
         elevation: 0,
         leading: IconButton(
+          tooltip: 'Back',
           icon: const Icon(
             Icons.arrow_back_ios_new,
             color: Color(0xFF1A1A2E),
@@ -352,6 +354,8 @@ class _ResponderEvacuationCentersScreenState
                           ),
                       ],
                     ),
+                    // Item 64: the credit OpenStreetMap requires.
+                    const OsmCredit(alignment: Alignment.bottomLeft),
                   ],
                 ),
                 Positioned(

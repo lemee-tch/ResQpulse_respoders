@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'about.dart';
 import 'api_service.dart';
 import 'responder_login.dart';
 
@@ -66,6 +67,96 @@ class _ResponderProfileScreenState extends State<ResponderProfileScreen> {
     );
   }
 
+  /// Personal Information (item 64 — before, it did nothing when tapped):
+  /// the agency account's details, read-only. MDRRMO manages them.
+  void _showPersonalInformation() {
+    final responder = _responder ?? const {};
+    String value(String key) {
+      final v = responder[key]?.toString().trim() ?? '';
+      return v.isEmpty ? 'Not set' : v;
+    }
+
+    final rows = <(String, String)>[
+      ('Account name', value('full_name')),
+      ('Agency', value('agency')),
+      ('Station or unit', value('unit_station')),
+      ('Badge number', value('badge_number')),
+      ('Email', value('email')),
+      ('Mobile number', value('mobile')),
+    ];
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Semantics(
+                header: true,
+                child: const Text(
+                  'Personal Information',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: _ink,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'This agency account is managed by MDRRMO Rosales. To change '
+                'these details or the password, ask MDRRMO.',
+                style: TextStyle(
+                  fontSize: 13.5,
+                  color: Color(0xFF4B5563),
+                  height: 1.4,
+                ),
+              ),
+              const SizedBox(height: 14),
+              for (final row in rows)
+                MergeSemantics(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          row.$1,
+                          style: const TextStyle(
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF4B5563),
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          row.$2,
+                          style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                            color: _ink,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   void _confirmLogout() {
     showDialog(
       context: context,
@@ -112,6 +203,7 @@ class _ResponderProfileScreenState extends State<ResponderProfileScreen> {
         backgroundColor: _navy,
         elevation: 0,
         leading: IconButton(
+          tooltip: 'Back',
           icon: const Icon(Icons.arrow_back, color: Colors.white),
           onPressed: () => Navigator.pop(context),
         ),
@@ -223,8 +315,8 @@ class _ResponderProfileScreenState extends State<ResponderProfileScreen> {
                             label: 'Personal Information',
                             subtitle: email.isNotEmpty
                                 ? email
-                                : 'View and edit your details',
-                            onTap: () {},
+                                : 'Your agency account\'s details',
+                            onTap: _showPersonalInformation,
                           ),
 
                           const SizedBox(height: 24),
@@ -232,9 +324,14 @@ class _ResponderProfileScreenState extends State<ResponderProfileScreen> {
                           const SizedBox(height: 10),
                           _MenuItem(
                             icon: Icons.info_outline_rounded,
-                            label: 'About ResQPulse',
-                            subtitle: 'App version, terms, and support',
-                            onTap: () {},
+                            label: 'About Resqponder',
+                            subtitle:
+                                'The app, privacy, terms and accessibility',
+                            onTap: () => Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => const AboutScreen(),
+                              ),
+                            ),
                           ),
 
                           const SizedBox(height: 28),
@@ -271,12 +368,13 @@ class _ResponderProfileScreenState extends State<ResponderProfileScreen> {
                           ),
 
                           const SizedBox(height: 18),
-                          Center(
+                          // grey[400] was too faint to read (item 64).
+                          const Center(
                             child: Text(
-                              'Resqponder · v1.0.0',
+                              'Resqponder · v$kAppVersion',
                               style: TextStyle(
-                                fontSize: 11.5,
-                                color: Colors.grey[400],
+                                fontSize: 12.5,
+                                color: Color(0xFF4B5563),
                               ),
                             ),
                           ),
@@ -321,59 +419,72 @@ class _MenuItem extends StatelessWidget {
     required this.onTap,
   });
 
+  // Item 64: a real button for screen readers (it was a bare
+  // GestureDetector), read as one item, with a ripple when tapped.
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(14),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.04),
-              blurRadius: 8,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 42,
-              height: 42,
-              decoration: BoxDecoration(
-                color: _chipBg,
-                borderRadius: BorderRadius.circular(12),
+    return MergeSemantics(child: Semantics(button: true, child: _tile()));
+  }
+
+  Widget _tile() {
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(14),
+      shadowColor: Colors.black.withOpacity(0.2),
+      elevation: 1,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Row(
+            children: [
+              ExcludeSemantics(
+                child: Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    color: _chipBg,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(icon, color: _navy, size: 20),
+                ),
               ),
-              child: Icon(icon, color: _navy, size: 20),
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    label,
-                    style: const TextStyle(
-                      fontSize: 14.5,
-                      fontWeight: FontWeight.bold,
-                      color: _ink,
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      label,
+                      style: const TextStyle(
+                        fontSize: 14.5,
+                        fontWeight: FontWeight.bold,
+                        color: _ink,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    subtitle,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: 12, color: Colors.grey[500]),
-                  ),
-                ],
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 12.5,
+                        color: Color(0xFF4B5563),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
-            Icon(Icons.chevron_right, color: Colors.grey[400], size: 20),
-          ],
+              const ExcludeSemantics(
+                child: Icon(
+                  Icons.chevron_right,
+                  color: Color(0xFF6B7280),
+                  size: 20,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
