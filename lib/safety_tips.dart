@@ -95,6 +95,69 @@ class _SafetyTipsScreenState extends State<SafetyTipsScreen> {
         ),
       ],
     ),
+    _TipItem(
+      title: 'Fire',
+      subtitle: 'Learn what to do',
+      emoji: '🧯',
+      color: Color(0xFFD32F2F),
+      bgColor: Color(0xFFFFEBEE),
+      remember:
+          'Quick action can save life — Call 911, start CPR, and don not stop until help arrives.',
+      steps: [
+        _StepItem(
+          title: 'Check for response',
+          bullets: [
+            'Tap the person shoulder and shout "Are you okay?"',
+            'If there is no response, call for help.',
+          ],
+          image: 'assets/fire1.png',
+        ),
+        _StepItem(
+          title: 'Check for breathing',
+          bullets: [
+            'Look for the movement.',
+            'Listen for breathing.',
+            'Check for no more than 10 seconds.',
+          ],
+          image: 'assets/fire2.png',
+        ),
+        _StepItem(
+          title: 'Start chest compressions',
+          bullets: [
+            'Place the heel of one hand on the center of the chest.',
+            'Place the other hand on top and interlock fingers.',
+            'Push hard and fast, at least 2 inches deep, at a rate of 100-120 compressions per minute.',
+          ],
+          image: 'assets/fire3.png',
+        ),
+        _StepItem(
+          title: 'Give rescue breaths',
+          bullets: [
+            'After 30 compressions, tilt the head back and lift the chin.',
+            'Pinch the nose, shut the mouth, and give 2 breaths.',
+            'Each breath should last about 1 second.',
+          ],
+          image: 'assets/fire4.png',
+        ),
+        _StepItem(
+          title: 'Continue CPR',
+          bullets: [
+            'Repeat cycle of 30 compressions and 2 breaths.',
+            'Continue until help arrives or the person shows signs of life.',
+          ],
+          image: 'assets/fire5.png',
+        ),
+        _StepItem(
+          title: 'Use an AED if available',
+          bullets: [
+            'Turn on the AED and follow the voice instructions.',
+            'Attach the pads, and let the AED analyze the heart rhythm.',
+            'Deliver a shock if advised, then resume CPR.',
+          ],
+          image: 'assets/fire6.png',
+        ),
+      ],
+    ),
 
     // ── Remaining topics: simple bullet format, same layout ───────────────
     _TipItem(
@@ -292,33 +355,57 @@ class _SafetyTipsScreenState extends State<SafetyTipsScreen> {
       emoji: '🫁',
       color: Color(0xFF1565C0),
       bgColor: Color(0xFFE3F2FD),
-      remember: 'Alternate back blows and thrusts until the object clears.',
+      remember: 'Act Quickly. The Heimmlich manuever can save a life.',
       steps: [
         _StepItem(
-          title: 'Confirm choking',
+          title: 'Check if they are choking',
           bullets: [
             'Ask the person if they are choking. If they can\'t speak, act fast.',
+            'Signs: cannot speak,, cough,, or breathe; making high pitched sounds; holding throat; panicked expression.',
           ],
-          icon: Icons.record_voice_over,
+          image: 'assets/choke1.png',
         ),
         _StepItem(
-          title: 'Back blows',
+          title: 'If the person can cough, let the cough',
           bullets: [
-            'Give up to 5 firm back blows between the shoulder blades.',
+            'Encourage them to cough forcefully.',
+            'Do not inteerfere if they are  coughing, breathing, or making sounds.',
           ],
-          icon: Icons.back_hand,
+          image: 'assets/choke2.png',
         ),
         _StepItem(
-          title: 'Abdominal thrusts',
-          bullets: ['Give up to 5 abdominal thrusts (Heimlich maneuver).'],
-          icon: Icons.compress,
-        ),
-        _StepItem(
-          title: 'Repeat',
+          title: 'If they cannot cough, speak, or breathe, call for help',
           bullets: [
-            'Alternate back blows and abdominal thrusts until the object is cleared.',
+            'Call emergency services immediately.',
+            'If someone is with you, ask them to call for help while you begin the back blows.',
           ],
-          icon: Icons.repeat,
+          image: 'assets/choke3.png',
+        ),
+        _StepItem(
+          title: 'Give 5 back blows',
+          bullets: [
+            'Stand to the side and slightly behind the person.',
+            'Lean  them forward.',
+            'Give 5 firm back blows between the shoulder blades with the heel of your hand.',
+          ],
+          image: 'assets/choke4.png',
+        ),
+        _StepItem(
+          title: 'Give 5 abdominal thrusts (Heimlich maneuver)',
+          bullets: [
+            'Stand behind the person and wrap your arms around their waist.',
+            'Make a fist with one hand and place it just above the navel.',
+            'Grasp the fist with your other hand and give up to 5 quick, inward and upward thrusts.',
+          ],
+          image: 'assets/choke5.png',
+        ),
+        _StepItem(
+          title: 'Repeat back blows and thrusts',
+          bullets: [
+            'Continue cycles of 5 back blows and 5 abdominal thrusts.',
+            'Repeat until the object comes out or the person becomes conscious.',
+          ],
+          image: 'assets/choke6.png',
         ),
       ],
     ),
@@ -334,26 +421,51 @@ class _SafetyTipsScreenState extends State<SafetyTipsScreen> {
         _StepItem(
           title: 'Stay calm and still',
           bullets: [
-            'Keep the person calm and still — movement spreads venom faster.',
+            'Stay calm and avoid panicking.',
+            'keep the person still and limit movement to slow the spread of venom.',
+            'Reassure the person and keep them as comfortable as possible.',
           ],
-          icon: Icons.self_improvement,
+          image: 'assets/snake1.png',
         ),
         _StepItem(
           title: 'Remove tight items',
           bullets: [
-            'Remove rings or tight clothing near the bite before swelling starts.',
+            'Take off rings, watches, or tight clothing near the bite site.',
+            'Swelling can happen quickly.',
           ],
-          icon: Icons.watch,
+          image: 'assets/snake2.png',
         ),
         _StepItem(
-          title: 'Immobilize',
-          bullets: ['Loosely immobilize the limb below heart level.'],
-          icon: Icons.airline_seat_recline_normal,
+          title: 'Keep the bitten area still',
+          bullets: [
+            'Immobilize the bitten limb with a splint or sling if possible.',
+            'Keep the limb at or slightly below heart level.',
+          ],
+          image: 'assets/snake3.png',
         ),
         _StepItem(
-          title: 'Get to a hospital',
-          bullets: ['Note the time of the bite and get to a hospital quickly.'],
-          isEmergencyStep: true,
+          title: 'Do not suck the venom, cut the wound, or apply ice',
+          bullets: [
+            'These methods are dangerouse and can worsen the injury.',
+            'They can cause more harm and increase the risk of infection.',
+          ],
+          image: 'assets/snake4.png',
+        ),
+        _StepItem(
+          title: 'Get to the hospital immediately',
+          bullets: [
+            'Call for emergency help or get to the nearest medical facility as quickly as possible.',
+            'Bring the person information (e.g. time, where it happened)',
+          ],
+          image: 'assets/snake5.png',
+        ),
+        _StepItem(
+          title: 'Watch for warning signs',
+          bullets: [
+            'Look for symptoms like swelling, pain, redness, nausea, vomiting, dizziness, or difficulty breathing.',
+            'Inform medical staff about the snake bite and any symptoms observed.',
+          ],
+          image: 'assets/snake6.png',
         ),
       ],
     ),
@@ -366,26 +478,52 @@ class _SafetyTipsScreenState extends State<SafetyTipsScreen> {
       remember: 'Heat stroke is life-threatening — cool the body fast.',
       steps: [
         _StepItem(
-          title: 'Move to shade',
-          bullets: ['Move the person to a cool, shaded area immediately.'],
-          icon: Icons.beach_access,
+          title: 'Move to the cooler place',
+          bullets: [
+            'Get the person out of direct sunlight and hot environment.',
+            'Move them to a shaded or air-conditioned area.',
+          ],
+          image: 'assets/heat1.png',
         ),
         _StepItem(
           title: 'Cool the body',
           bullets: [
-            'Remove excess clothing and apply cool, wet cloths to skin.',
+            'Use cool water, wet cloths, or a fan to lower body temperature.',
+            'Focus on the head, neck, armpits, and groin areas.',
           ],
-          icon: Icons.water_drop,
+          image: 'assets/heat2.png',
         ),
         _StepItem(
-          title: 'Hydrate',
-          bullets: ['Offer small sips of cool water if the person is alert.'],
-          icon: Icons.local_drink,
+          title: 'Give fluids if alert',
+          bullets: [
+            'Offer small sips of cool water if the person is alert.'
+                'Take a small sip.',
+          ],
+          image: 'assets/heat3.png',
         ),
         _StepItem(
-          title: 'Monitor',
-          bullets: ['Watch closely for confusion or loss of consciousness.'],
-          isEmergencyStep: true,
+          title: 'Monitor the condition',
+          bullets: [
+            'Check their breathing, temperature, and responsiveness.',
+            'Keep cooling them while waiting for medical help.',
+          ],
+          image: 'assets/heat4.png',
+        ),
+        _StepItem(
+          title: 'Call for emergency help',
+          bullets: [
+            'If symptoms are severe or worsening, call emergency services immediately.',
+            'Even if symptoms improve, get medical evaluation as soon as possible.',
+          ],
+          image: 'assets/heat5.png',
+        ),
+        _StepItem(
+          title: 'Keep them resting and comfortable',
+          bullets: [
+            'Stay in cool and shaded area.',
+            'Do not let them return to strenuous activity too soon.',
+          ],
+          image: 'assets/heat6.png',
         ),
       ],
     ),
@@ -400,27 +538,55 @@ class _SafetyTipsScreenState extends State<SafetyTipsScreen> {
           'Avoid blowing the nose for several hours after bleeding stops.',
       steps: [
         _StepItem(
-          title: 'Sit forward',
-          bullets: ['Sit up and lean slightly forward.'],
-          icon: Icons.event_seat,
-        ),
-        _StepItem(
-          title: 'Pinch the nose',
+          title: 'Stay calm and sit up',
           bullets: [
-            'Pinch the soft part of the nose firmly for 10-15 minutes.',
+            'Keep the person calm and seated, leaning slightly forward.',
+            'Avoid laying down (unless they feel dizzy)',
           ],
-          timeBadge: '10-15 minutes',
-          icon: Icons.pinch,
+          image: 'assets/nose1.png',
         ),
         _StepItem(
-          title: 'Apply cold compress',
-          bullets: ['Apply a cold compress to the bridge of the nose.'],
-          icon: Icons.ac_unit,
+          title: 'Pinch the soft part of the nose',
+          bullets: [
+            'Use your thumb and index finger to pinch the soft part of the nose just below the bridge.',
+            'Press firmly for 10-15 minutes without releasing.',
+          ],
+          image: 'assets/nose2.png',
         ),
         _StepItem(
-          title: 'Avoid blowing',
-          bullets: ['Avoid blowing the nose for several hours after.'],
-          icon: Icons.block,
+          title: 'Lean forward',
+          bullets: [
+            'Slightly tilt your head forward.',
+            'Breathe through your mouth.',
+            'Spit out any blood that collects in the mouth (do not swallow).',
+          ],
+          image: 'assets/nose3.png',
+        ),
+        _StepItem(
+          title: 'Apply a cold compress',
+          bullets: [
+            'Place a cold compress or ice pack on the bridge of the nose.',
+            'This can help constrict blood vessels and reduce bleeding.',
+            'Keep it on  for 10-15 minutes.',
+          ],
+          image: 'assets/nose4.png',
+        ),
+        _StepItem(
+          title: 'Avoid certain actions',
+          bullets: [
+            'Do not blow your nose, pick it, or bend over for several hours after bleeding stops.',
+            'Do not pick your nose or insert anything into the nostrils.',
+          ],
+          image: 'assets/nose5.png',
+        ),
+        _StepItem(
+          title: 'Seek medical help',
+          bullets: [
+            'If the bleeding continues after 20 minutes',
+            'If it happens often or is severe',
+            'If there are other symptoms like dizziness, fainting, or difficulty breathing',
+          ],
+          image: 'assets/nose6.png',
         ),
       ],
     ),
@@ -433,28 +599,56 @@ class _SafetyTipsScreenState extends State<SafetyTipsScreen> {
       remember: 'Anaphylaxis can be fatal within minutes — act immediately.',
       steps: [
         _StepItem(
-          title: 'Remove the allergen',
-          bullets: ['Remove the person from the allergen source if possible.'],
-          icon: Icons.directions_walk,
-        ),
-        _StepItem(
-          title: 'Use an EpiPen',
+          title: 'Recognize the signs',
           bullets: [
-            'Use an epinephrine auto-injector on the outer thigh if available.',
+            'Hives, rash, itching.',
+            'Swelling of lips, tongue, or throat.',
+            'Difficulty breathing or swallowing.',
+            'Dizziness or nausea.',
           ],
-          icon: Icons.vaccines,
+          image: 'assets/aler1.png',
         ),
         _StepItem(
-          title: 'Position them',
+          title: 'Give antihistamine(if available)',
           bullets: [
-            'Lay them flat and elevate legs, unless breathing is difficult.',
+            'Help reduce itching and swelling.',
+            'Follow the dosage instructions on the package.',
           ],
-          icon: Icons.airline_seat_flat,
+          image: 'assets/aler2.png',
         ),
         _StepItem(
-          title: 'Monitor',
-          bullets: ['Monitor breathing closely and be ready to start CPR.'],
-          isEmergencyStep: true,
+          title: 'Use an epinephrine auto-injector(if available)',
+          bullets: [
+            'For severe reactions(e.g., trouble breathing, swelling, anaphylaxis).'
+                'Inject into the outer thigh and hold for 10 seconds.',
+          ],
+          image: 'assets/aler3.png',
+        ),
+        _StepItem(
+          title: 'Call for emergency help',
+          bullets: [
+            'If symptoms are severe or worsening, call emergency services immediately.'
+                'Even if symptoms improve, get medical evaluation as soon as possible.',
+          ],
+          image: 'assets/aler4.png',
+        ),
+        _StepItem(
+          title: 'Keep the person calm and comfortable',
+          bullets: [
+            'Help them sit or lie dowm.',
+            'Losin tigh clothing.',
+            'Keep them warm (but not hot).',
+          ],
+          image: 'assets/aler5.png',
+        ),
+        _StepItem(
+          title: 'Monitor and be ready',
+          bullets: [
+            'Watch the worsining of symptoms.',
+            'Be ready to give another dose of epinephrine if prescribed and symptoms persist.',
+            'Do not leave them alone',
+          ],
+          image: 'assets/aler6.png',
         ),
       ],
     ),
@@ -464,31 +658,62 @@ class _SafetyTipsScreenState extends State<SafetyTipsScreen> {
       emoji: '🏚️',
       color: Color(0xFF6D4C41),
       bgColor: Color(0xFFEFEBE9),
-      remember: 'Drop, cover, and hold on until shaking fully stops.',
+      remember:
+          'Stay calm, stay safe, and help others if you can. Preperation todaay can make a difference tomorrow.',
       steps: [
         _StepItem(
-          title: 'Drop',
-          bullets: ['DROP to hands and knees immediately.'],
-          icon: Icons.arrow_downward,
-        ),
-        _StepItem(
-          title: 'Cover',
+          title: 'Drop, Cover, and Hold On',
           bullets: [
-            'Take COVER under a sturdy table or against an interior wall.',
+            'DROP to hands and knees immediately, avoid falling.',
+            'Take cover under a sturdy table or against an interior wall.',
+            'Hold on to it firmly until the shaking stops.',
           ],
-          icon: Icons.table_restaurant,
+          image: 'assets/eq1.png',
         ),
         _StepItem(
-          title: 'Hold on',
-          bullets: ['HOLD ON until the shaking stops.'],
-          icon: Icons.pan_tool,
-        ),
-        _StepItem(
-          title: 'Evacuate carefully',
+          title: 'Stay away from hazards',
           bullets: [
-            'After shaking stops, evacuate carefully and avoid damaged structures.',
+            'Move away from windows, glass, heavy furniture, and appliances.',
+            'Do not run outside during the shaking.',
           ],
-          icon: Icons.directions_walk,
+          image: 'assets/eq2.png',
+        ),
+        _StepItem(
+          title: 'If you are outside',
+          bullets: [
+            'Move to an open area away from buildings, trees, streetlights, and utility wires.',
+            'Drop to the ground and stay there until the shaking stops.',
+          ],
+          image: 'assets/eq3.png',
+        ),
+        _StepItem(
+          title: 'If you are in a vehicle',
+          bullets: [
+            'Pull over to a safe location away from buildings, trees, and overpasses.',
+            'Stop the vehicle and stay inside until the shaking stops.',
+            'Avoid stopping under bridges, overpasses, or near buildings and trees.',
+          ],
+          image: 'assets/eq4.png',
+        ),
+        _StepItem(
+          title: 'After the shaking stops',
+          bullets: [
+            'Check yourself and others for injuries.',
+            'Be prepared for aftershocks.',
+            'Do not use elevators',
+            'Check gas leaks, water leaks, and electrical damage.',
+            'Listen to official updates and follow emergency instructions.',
+          ],
+          image: 'assets/eq5.png',
+        ),
+        _StepItem(
+          title: 'Make a plan and be prepared',
+          bullets: [
+            'Create a emergency plan with your family and practice it.',
+            'Keep emergency kit with food, water, first aid supplies, and important documents.',
+            'Know safe spots in each room and how to turn off utilities if necessary.',
+          ],
+          image: 'assets/eq6.png',
         ),
       ],
     ),
@@ -612,26 +837,7 @@ class _SafetyTipsScreenState extends State<SafetyTipsScreen> {
             padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
-              children: const [
-                ExcludeSemantics(
-                  child: Icon(
-                    Icons.info_outline,
-                    size: 16,
-                    color: Color(0xFF4B5563),
-                  ),
-                ),
-                SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'General first-aid guidance, not medical advice. Follow your training and your agency\'s protocols.',
-                    style: TextStyle(
-                      fontSize: 12.5,
-                      color: Color(0xFF4B5563),
-                      height: 1.4,
-                    ),
-                  ),
-                ),
-              ],
+              children: const [ExcludeSemantics(), SizedBox(width: 8)],
             ),
           ),
           Expanded(
@@ -736,7 +942,6 @@ class _TipDetailScreen extends StatelessWidget {
         backgroundColor: Colors.white,
         elevation: 0,
         leading: IconButton(
-          tooltip: 'Back',
           icon: const Icon(
             Icons.arrow_back_ios_new,
             color: Color(0xFF1A1A2E),
